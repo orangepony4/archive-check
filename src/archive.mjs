@@ -20,13 +20,38 @@ function isRecord(value) {
     return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
+function unicodePathKey(path) {
+    return path.normalize('NFC');
+}
+
+function portableNameKey(name) {
+    return name.normalize('NFC').toUpperCase().normalize('NFC');
+}
+
+function registerPath(names, segments, keyForName, source) {
+    // Track directory spellings too, so aliases with disjoint children cannot merge.
+    for (let index = 0; index < segments.length; index++) {
+        const name = segments[index];
+        const key = keyForName(name);
+        const isFile = index === segments.length - 1;
+        let entry = names.get(key);
+        if (entry && (entry.name !== name || isFile || entry.children === null)) {
+            throw new Error(`Duplicate or conflicting ${source} path ${JSON.stringify(segments.join('/'))}.`);
+        }
+        if (!entry) {
+            entry = { name, children: isFile ? null : new Map() };
+            names.set(key, entry);
+        }
+        names = entry.children;
+    }
+}
+
 export function validateManifest(manifest) {
     if (!isRecord(manifest) || manifest.version !== 1 || manifest.algorithm !== 'sha256'
         || !Array.isArray(manifest.files)) {
         throw new Error('Expected a version 1 SHA-256 manifest with a files array.');
     }
 
-    // Track each directory component so aliases such as A/x and a/y are rejected.
     const rootNames = new Map();
     for (const file of manifest.files) {
         if (!isRecord(file) || typeof file.path !== 'string'
@@ -40,21 +65,7 @@ export function validateManifest(manifest) {
             throw new Error(`Unsafe or nonportable manifest path ${JSON.stringify(file.path)}.`);
         }
 
-        let names = rootNames;
-        for (let index = 0; index < segments.length; index++) {
-            const name = segments[index];
-            const key = name.toUpperCase().normalize('NFC');
-            const isFile = index === segments.length - 1;
-            let entry = names.get(key);
-            if (entry && (entry.name !== name || isFile || entry.children === null)) {
-                throw new Error(`Duplicate or conflicting manifest path ${JSON.stringify(file.path)}.`);
-            }
-            if (!entry) {
-                entry = { name, children: isFile ? null : new Map() };
-                names.set(key, entry);
-            }
-            names = entry.children;
-        }
+        registerPath(rootNames, segments, portableNameKey, 'manifest');
     }
 }
 
@@ -196,15 +207,24 @@ export async function verifyManifest(root, manifest, { excludePath, onProgress }
     validateManifest(manifest);
     const reportProgress = makeProgressReporter(onProgress);
     const buffer = Buffer.allocUnsafe(hashBufferSize);
-    const remaining = new Map(manifest.files.map(file => [file.path, file]));
+    const remaining = new Map(manifest.files.map(file => [unicodePathKey(file.path), file]));
+    const actualNames = new Map();
+    const unsupportedKeys = new Set();
     const result = { checked: 0, missing: [], changed: [], unexpected: [], unsupported: [] };
     for await (const entry of walkArchive(root, excludePath)) {
-        const expected = remaining.get(entry.path);
-        remaining.delete(entry.path);
-        let hashedBytes = 0;
+        const key = unicodePathKey(entry.path);
         if (!entry.stat) {
+            unsupportedKeys.add(key);
             result.unsupported.push(entry.path);
-        } else if (!expected) {
+            reportProgress?.();
+            continue;
+        }
+
+        registerPath(actualNames, entry.path.split('/'), unicodePathKey, 'archive');
+        const expected = remaining.get(key);
+        remaining.delete(key);
+        let hashedBytes = 0;
+        if (!expected) {
             result.unexpected.push(entry.path);
         } else if (entry.stat.size !== BigInt(expected.size)) {
             result.changed.push(entry.path);
@@ -219,7 +239,12 @@ export async function verifyManifest(root, manifest, { excludePath, onProgress }
         }
         reportProgress?.(hashedBytes);
     }
-    result.missing = [...remaining.keys()].sort();
+    for (const [key, file] of remaining) {
+        if (!unsupportedKeys.has(key)) {
+            result.missing.push(file.path);
+        }
+    }
+    result.missing.sort();
     result.changed.sort();
     result.unexpected.sort();
     result.unsupported.sort();
@@ -230,11 +255,12 @@ export function compareManifests(previous, current) {
     validateManifest(previous);
     validateManifest(current);
 
-    const remaining = new Map(previous.files.map(file => [file.path, file]));
+    const remaining = new Map(previous.files.map(file => [unicodePathKey(file.path), file]));
     const result = { unchanged: 0, added: [], removed: [], changed: [] };
     for (const file of current.files) {
-        const prior = remaining.get(file.path);
-        remaining.delete(file.path);
+        const key = unicodePathKey(file.path);
+        const prior = remaining.get(key);
+        remaining.delete(key);
         if (!prior) {
             result.added.push(file.path);
         } else if (prior.size !== file.size || prior.sha256 !== file.sha256) {
@@ -244,7 +270,7 @@ export function compareManifests(previous, current) {
         }
     }
     result.added.sort();
-    result.removed = [...remaining.keys()].sort();
+    result.removed = [...remaining.values()].map(file => file.path).sort();
     result.changed.sort();
     return result;
 }

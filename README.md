@@ -48,7 +48,7 @@ Use `compare` when you have two manifests and want to see what changed without r
 node bin/archive-check.mjs compare previous.json current.json
 ```
 
-The report lists added, removed, and changed paths, plus a count of unchanged files. Paths are matched exactly, so renaming a file appears as a removal and an addition. Add `--json` for structured output. The exit codes match those of `verify`.
+The report lists added, removed, and changed paths, plus a count of unchanged files. A rename appears as a removal and an addition. Canonically equivalent Unicode spellings match, while case changes count as renames. Add `--json` for structured output. The exit codes match those of `verify`.
 
 ## What the inventory covers
 
@@ -74,7 +74,7 @@ The report lists added, removed, and changed paths, plus a count of unchanged fi
 }
 ```
 
-Manifests use UTF-8 JSON. Each path is relative to the archive and uses `/` as its separator. Paths are case-sensitive. The size is a non-negative safe integer in bytes, and the hash contains 64 lowercase hexadecimal characters. Archive Check rejects conflicting names, path traversal, and Windows-reserved path segments. The destination filesystem still determines which filename lengths it can store.
+Manifests use UTF-8 JSON. Each path is relative to the archive and uses `/` as its separator. Archive Check keeps the original spelling in the manifest and matches canonically equivalent Unicode paths across filesystems. Matching remains case-sensitive. The size is a non-negative safe integer in bytes, and the hash contains 64 lowercase hexadecimal characters. Archive Check rejects conflicting names, path traversal, and Windows-reserved path segments. The destination filesystem still determines which filename lengths it can store.
 
 ## Development
 

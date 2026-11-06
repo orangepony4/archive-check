@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdir, mkdtemp, readFile, realpath, rm, rmdir, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, realpath, rm, rmdir, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { test } from 'node:test';
@@ -158,6 +158,98 @@ test('compares two manifests without reading either archive', async t => {
     expectExit(run('compare', before, after, '--json'), 2);
 });
 
+test('matches canonically equivalent Unicode paths without rewriting the manifest', async t => {
+    const { directory, archive, manifest, run } = await fixture(t);
+    const dir = 'Résumé';
+    const name = 'café.txt';
+    await mkdir(join(archive, dir));
+    await writeFile(join(archive, dir, name), 'same content');
+    const [actualDir] = await readdir(archive);
+    const [actualName] = await readdir(join(archive, actualDir));
+    const actualPath = `${actualDir}/${actualName}`;
+    const otherSpelling = part => part === part.normalize('NFC')
+        ? part.normalize('NFD')
+        : part.normalize('NFC');
+    const otherPath = `${otherSpelling(actualDir)}/${otherSpelling(actualName)}`;
+    assert.notEqual(actualPath, otherPath);
+    assert.equal(actualPath.normalize('NFC'), otherPath.normalize('NFC'));
+
+    expectExit(run('create', archive, '--manifest', manifest), 0);
+    const created = JSON.parse(await readFile(manifest, 'utf8'));
+    assert.deepEqual(created, {
+        version: 1, algorithm: 'sha256', files: [manifestEntry(actualPath, 'same content')],
+    });
+
+    const alternateManifest = join(directory, 'alternate.json');
+    await writeFile(alternateManifest, JSON.stringify({
+        ...created, files: [manifestEntry(otherPath, 'same content')],
+    }));
+    const verified = run('verify', archive, '--manifest', alternateManifest, '--json');
+    expectExit(verified, 0);
+    assert.deepEqual(JSON.parse(verified.stdout), {
+        checked: 1, missing: [], changed: [], unexpected: [], unsupported: [],
+    });
+    const compared = run('compare', manifest, alternateManifest, '--json');
+    expectExit(compared, 0);
+    assert.deepEqual(JSON.parse(compared.stdout), {
+        unchanged: 1, added: [], removed: [], changed: [],
+    });
+
+    await writeFile(join(archive, actualDir, actualName), 'same length!');
+    const changed = run('verify', archive, '--manifest', alternateManifest, '--json');
+    expectExit(changed, 1);
+    assert.deepEqual(JSON.parse(changed.stdout), {
+        checked: 0, missing: [], changed: [actualPath], unexpected: [], unsupported: [],
+    });
+});
+
+test('keeps case-only path differences visible on every filesystem', async t => {
+    const { directory, archive, manifest, run } = await fixture(t);
+    await writeFile(join(archive, 'Photo.txt'), 'same content');
+    expectExit(run('create', archive, '--manifest', manifest), 0);
+    const alternate = join(directory, 'alternate.json');
+    await writeFile(alternate, JSON.stringify({
+        version: 1, algorithm: 'sha256', files: [manifestEntry('photo.txt', 'same content')],
+    }));
+
+    const verified = run('verify', archive, '--manifest', alternate, '--json');
+    expectExit(verified, 1);
+    assert.deepEqual(JSON.parse(verified.stdout), {
+        checked: 0, missing: ['photo.txt'], changed: [], unexpected: ['Photo.txt'], unsupported: [],
+    });
+    const compared = run('compare', manifest, alternate, '--json');
+    expectExit(compared, 1);
+    assert.deepEqual(JSON.parse(compared.stdout), {
+        unchanged: 0, added: ['photo.txt'], removed: ['Photo.txt'], changed: [],
+    });
+});
+
+test('rejects canonically ambiguous archive directories with disjoint files', async t => {
+    const { directory, archive, manifest, run } = await fixture(t);
+    const nfc = 'résumé';
+    const nfd = nfc.normalize('NFD');
+    await mkdir(join(archive, nfc));
+    try {
+        await mkdir(join(archive, nfd));
+    } catch (error) {
+        if (error.code !== 'EEXIST') throw error;
+        t.skip('The filesystem coalesces canonically equivalent directory names');
+        return;
+    }
+    await writeFile(join(archive, nfc, 'first.txt'), 'first');
+    await writeFile(join(archive, nfd, 'second.txt'), 'second');
+    await writeFile(manifest, JSON.stringify({
+        version: 1,
+        algorithm: 'sha256',
+        files: [manifestEntry(`${nfc}/first.txt`, 'first'), manifestEntry(`${nfc}/second.txt`, 'second')],
+    }));
+
+    expectExit(run('verify', archive, '--manifest', manifest, '--json'), 2);
+    const output = join(directory, 'new.json');
+    expectExit(run('create', archive, '--manifest', output), 2);
+    await assert.rejects(readFile(output), { code: 'ENOENT' });
+});
+
 test('reports changed, missing, and unexpected files together', async t => {
     const { archive, manifest, run } = await fixture(t);
     await writeFile(join(archive, 'same-size.txt'), 'abc');
@@ -219,6 +311,7 @@ test('rejects malformed or unsafe manifests', async t => {
         [validEntry, validEntry],
         [validEntry, manifestEntry('OK.TXT', 'ok')],
         [validEntry, manifestEntry('ok.txt/nested', 'ok')],
+        [manifestEntry('Áͅ/first.txt', ''), manifestEntry('Áͅ/second.txt', '')],
         [{ ...validEntry, size: -1 }],
         [{ ...validEntry, sha256: 'invalid' }],
     ];
