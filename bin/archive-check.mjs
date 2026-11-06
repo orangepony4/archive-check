@@ -40,12 +40,12 @@ async function readManifest(file) {
     }
     const flags = constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0);
     const handle = await open(file, flags);
-    let content;
+    let bytes;
     try {
         if (!sameFile(before, await handle.stat({ bigint: true }))) {
             throw new Error(`Manifest changed before reading: ${file}`);
         }
-        content = await handle.readFile('utf8');
+        bytes = await handle.readFile();
         if (!sameFile(before, await handle.stat({ bigint: true }))) {
             throw new Error(`Manifest changed during reading: ${file}`);
         }
@@ -54,9 +54,10 @@ async function readManifest(file) {
     }
     let manifest;
     try {
-        manifest = JSON.parse(content.replace(/^\uFEFF/, ''));
+        const content = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+        manifest = JSON.parse(content);
     } catch (error) {
-        throw new Error(`Invalid manifest JSON: ${error.message}`);
+        throw new Error(`Invalid UTF-8 or JSON in manifest: ${error.message}`);
     }
     validateManifest(manifest);
     return manifest;

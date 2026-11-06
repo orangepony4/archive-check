@@ -210,6 +210,26 @@ test('rejects malformed or unsafe manifests', async t => {
     assert.equal(await readFile(join(directory, 'outside.txt'), 'utf8'), 'outside');
 });
 
+test('rejects invalid UTF-8 without replacing bytes in paths', async t => {
+    const { archive, manifest, run } = await fixture(t);
+    const name = 'file-\uFFFD.txt';
+    await writeFile(join(archive, name), 'content');
+    expectExit(run('create', archive, '--manifest', manifest), 0);
+    const valid = await readFile(manifest);
+    const replacement = Buffer.from('\uFFFD');
+    const index = valid.indexOf(replacement);
+    assert.notEqual(index, -1);
+    await writeFile(manifest, Buffer.concat([
+        valid.subarray(0, index), Buffer.from([0xff]), valid.subarray(index + replacement.length),
+    ]));
+    const verified = run('verify', archive, '--manifest', manifest, '--json');
+    expectExit(verified, 2);
+    assert.match(verified.stderr, /Invalid UTF-8/);
+
+    await writeFile(manifest, Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), valid]));
+    expectExit(run('verify', archive, '--manifest', manifest, '--json'), 0);
+});
+
 test('requires --force to replace a valid manifest and preserves unrelated output files', async t => {
     const { archive, manifest, run } = await fixture(t);
     const archivedFile = join(archive, 'file.txt');

@@ -45,9 +45,27 @@ The report lists added, removed, and changed paths, plus a count of unchanged fi
 
 - The manifest contains relative paths, byte sizes, and SHA-256 hashes. Keep a trusted copy of it to use as your reference after copying or restoring the folder.
 - If the manifest is stored inside the archive, Archive Check excludes the manifest file itself. The same archive yields the same manifest while the paths and bytes stay the same.
-- Empty directories and metadata such as permissions and timestamps are outside the inventory. Creating a manifest rejects symbolic links and special files. Verification reports them under `unsupported`.
+- Empty directories, permissions, timestamps, and NTFS alternate data streams are outside the inventory. Creating a manifest rejects symbolic links and special files. Verification reports them under `unsupported`.
 - Both commands read the archived files. `create` writes the specified manifest and protects any existing file there. Use `--force` to replace a valid Archive Check manifest after intentionally changing the reference snapshot.
 - Scan a stable folder after a copy finishes. A scan reads files one at a time and cannot take a filesystem snapshot.
+
+## Manifest format
+
+```json
+{
+  "version": 1,
+  "algorithm": "sha256",
+  "files": [
+    {
+      "path": "docs/empty.txt",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ]
+}
+```
+
+Manifests use UTF-8 JSON. Each path is relative to the archive and uses `/` as its separator. Paths are case-sensitive. The size is a non-negative safe integer in bytes, and the hash contains 64 lowercase hexadecimal characters. Archive Check rejects conflicting names, path traversal, and Windows-reserved path segments.
 
 ## Development
 
