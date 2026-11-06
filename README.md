@@ -73,6 +73,8 @@ node bin/archive-check.mjs export-sha256 backup.json > "/path/to/archive.sha256"
 (cd "/path/to/copy" && sha256sum -c "/path/to/archive.sha256")
 ```
 
+On Windows, run this example in Git Bash so the redirected list keeps its UTF-8 bytes and LF line endings.
+
 The export reads the manifest alone and writes its checksums to standard output. It exits with code `0` on success and `2` on invalid input or execution errors. The list keeps the original filename spelling. Use Archive Check's `verify` to detect extra paths, match canonically equivalent Unicode names, or verify an empty archive.
 
 ## What the inventory covers
