@@ -11,11 +11,13 @@ const usage = `Usage:
   archive-check create <folder> --manifest <file> [--force] [--progress]
   archive-check verify <folder> --manifest <file> [--json] [--progress]
   archive-check compare <before.json> <after.json> [--json] [--detect-moves]
+  archive-check export-sha256 <manifest.json>
 
 Commands:
   create   Record relative paths, sizes and SHA-256 hashes.
   verify   Report missing, changed, unexpected or unsupported paths.
   compare  Report added, removed and changed paths between two manifests.
+  export-sha256  Write a checksum list for sha256sum -c.
 
 Options:
   --manifest <file>  Path to the JSON manifest.
@@ -199,6 +201,20 @@ async function main() {
         return 0;
     }
     const [command, ...operands] = positionals;
+    if (command === 'export-sha256') {
+        const [file] = operands;
+        if (operands.length !== 1 || !file || values.manifest !== undefined
+            || values.force || values.json || values.progress || values['detect-moves']) {
+            throw new Error('Expected export-sha256 <manifest.json>. See --help.');
+        }
+        const { files } = await readManifest(resolve(file));
+        files.sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
+        for (const { path, sha256 } of files) {
+            // GNU sha256sum interprets a lone dash as standard input.
+            console.log(`${sha256} *${path === '-' ? './-' : path}`);
+        }
+        return 0;
+    }
     if (command === 'compare') {
         const [before, after] = operands;
         if (operands.length !== 2 || !before || !after ||
@@ -215,7 +231,7 @@ async function main() {
     const [folder] = operands;
     if (operands.length !== 1 || !folder || !values.manifest ||
         !['create', 'verify'].includes(command)) {
-        throw new Error('Expected create, verify or compare with its required arguments. See --help.');
+        throw new Error('Expected create, verify, compare or export-sha256 with its required arguments. See --help.');
     }
     if ((command === 'create' && values.json) || (command === 'verify' && values.force)) {
         throw new Error('--json applies to verify and --force applies to create. See --help.');

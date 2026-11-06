@@ -52,6 +52,17 @@ The report lists added, removed, and changed paths, plus a count of unchanged fi
 
 Add `--detect-moves` to list possible renames alongside the raw differences. A candidate needs exactly one removed and one added file with the same size and SHA-256. Groups with duplicate content on either side are left ambiguous.
 
+## Export a checksum list
+
+On a system with GNU `sha256sum`, export the manifest to a text file and check the copy from its root directory.
+
+```sh
+node bin/archive-check.mjs export-sha256 backup.json > "/path/to/archive.sha256"
+(cd "/path/to/copy" && sha256sum -c "/path/to/archive.sha256")
+```
+
+The export reads the manifest alone and writes its checksums to standard output. It exits with code `0` on success and `2` on invalid input or execution errors. The list keeps the original filename spelling. Use Archive Check's `verify` to detect extra paths, match canonically equivalent Unicode names, or verify an empty archive.
+
 ## What the inventory covers
 
 - The manifest contains relative paths, byte sizes, and SHA-256 hashes. Keep a trusted copy of it to use as your reference after copying or restoring the folder.

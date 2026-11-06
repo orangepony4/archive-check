@@ -187,6 +187,48 @@ test('suggests unique moves while preserving additions and removals', async t =>
     assert.match(textResult.stdout, /"previous\/unique\.txt" -> "current\/unique\.txt"/);
 });
 
+test('exports a sorted binary checksum list without reading the archive', async t => {
+    const { manifest, run } = await fixture(t);
+    const zeta = manifestEntry('zeta.bin', Buffer.from([0, 255, 128]));
+    const spacedUnicode = manifestEntry('nested/cafe\u0301 photo.png', 'image');
+    const dash = manifestEntry('-', 'regular file named dash');
+    await writeFile(manifest, JSON.stringify({
+        version: 1, algorithm: 'sha256', files: [zeta, spacedUnicode, dash],
+    }));
+
+    const result = run('export-sha256', manifest);
+    expectExit(result, 0);
+    assert.equal(result.stderr, '');
+    assert.equal(result.stdout,
+        `${dash.sha256} *./-\n${spacedUnicode.sha256} *${spacedUnicode.path}\n${zeta.sha256} *${zeta.path}\n`);
+});
+
+test('exports an empty list and rejects malformed input or unrelated options', async t => {
+    const { manifest, run } = await fixture(t);
+    await writeFile(manifest, JSON.stringify({ version: 1, algorithm: 'sha256', files: [] }));
+    const empty = run('export-sha256', manifest);
+    expectExit(empty, 0);
+    assert.equal(empty.stdout, '');
+    for (const args of [
+        [], [manifest, manifest], [manifest, '--json'], [manifest, '--force'],
+        [manifest, '--progress'], [manifest, '--detect-moves'], [manifest, '--manifest', manifest],
+    ]) {
+        const result = run('export-sha256', ...args);
+        expectExit(result, 2);
+        assert.equal(result.stdout, '');
+    }
+
+    await writeFile(manifest, JSON.stringify({
+        version: 1, algorithm: 'sha256',
+        files: [manifestEntry('valid.txt', 'valid'), manifestEntry('invalid\nname.txt', 'invalid')],
+    }));
+    const unsafe = run('export-sha256', manifest);
+    expectExit(unsafe, 2);
+    assert.equal(unsafe.stdout, '');
+    await writeFile(manifest, '{');
+    expectExit(run('export-sha256', manifest), 2);
+});
+
 test('prints the version from package metadata', async t => {
     const { run } = await fixture(t);
     const packageMetadata = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
