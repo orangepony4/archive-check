@@ -158,6 +158,43 @@ test('compares two manifests without reading either archive', async t => {
     expectExit(run('compare', before, after, '--json'), 2);
 });
 
+test('suggests unique moves while preserving additions and removals', async t => {
+    const { directory, run } = await fixture(t);
+    const before = join(directory, 'before.json');
+    const after = join(directory, 'after.json');
+    const manifest = files => JSON.stringify({ version: 1, algorithm: 'sha256', files });
+    await writeFile(before, manifest([
+        manifestEntry('previous/unique.txt', 'unique'),
+        manifestEntry('previous/ambiguous-a.txt', 'duplicate'),
+        manifestEntry('previous/ambiguous-b.txt', 'duplicate'),
+    ]));
+    await writeFile(after, manifest([
+        manifestEntry('current/ambiguous.txt', 'duplicate'),
+        manifestEntry('current/unique.txt', 'unique'),
+    ]));
+    const result = run('compare', before, after, '--detect-moves', '--json');
+    expectExit(result, 1);
+    assert.deepEqual(JSON.parse(result.stdout), {
+        unchanged: 0,
+        added: ['current/ambiguous.txt', 'current/unique.txt'],
+        removed: ['previous/ambiguous-a.txt', 'previous/ambiguous-b.txt', 'previous/unique.txt'],
+        changed: [],
+        possibleMoves: [{ from: 'previous/unique.txt', to: 'current/unique.txt' }],
+    });
+    const textResult = run('compare', before, after, '--detect-moves');
+    expectExit(textResult, 1);
+    assert.match(textResult.stdout, /Possible moves: 1/);
+    assert.match(textResult.stdout, /"previous\/unique\.txt" -> "current\/unique\.txt"/);
+});
+
+test('prints the version from package metadata', async t => {
+    const { run } = await fixture(t);
+    const packageMetadata = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
+    const result = run('--version');
+    expectExit(result, 0);
+    assert.equal(result.stdout.trim(), packageMetadata.version);
+});
+
 test('matches canonically equivalent Unicode paths without rewriting the manifest', async t => {
     const { directory, archive, manifest, run } = await fixture(t);
     const dir = 'Résumé';

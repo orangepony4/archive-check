@@ -1,6 +1,6 @@
 {
   "name": "archive-check",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "Create and verify portable SHA-256 manifests for folder archives",
   "type": "module",

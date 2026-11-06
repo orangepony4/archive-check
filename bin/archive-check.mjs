@@ -2,7 +2,7 @@
 
 import { randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
-import { copyFile, link, lstat, open, rename, rm, stat } from 'node:fs/promises';
+import { copyFile, link, lstat, open, readFile, rename, rm, stat } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { compareManifests, createManifest, validateManifest, verifyManifest } from '../src/archive.mjs';
@@ -10,7 +10,7 @@ import { compareManifests, createManifest, validateManifest, verifyManifest } fr
 const usage = `Usage:
   archive-check create <folder> --manifest <file> [--force] [--progress]
   archive-check verify <folder> --manifest <file> [--json] [--progress]
-  archive-check compare <before.json> <after.json> [--json]
+  archive-check compare <before.json> <after.json> [--json] [--detect-moves]
 
 Commands:
   create   Record relative paths, sizes and SHA-256 hashes.
@@ -21,8 +21,10 @@ Options:
   --manifest <file>  Path to the JSON manifest.
   --force           Replace an existing valid manifest when creating.
   --progress        Print scan progress to standard error.
+  --detect-moves    Suggest unique same-content renames during comparison.
   --json            Print the verification or comparison report as JSON.
-  -h, --help        Show this help.`;
+  -h, --help        Show this help.
+  -v, --version     Show the installed version.`;
 
 async function statIfPresent(file) {
     try {
@@ -57,9 +59,13 @@ async function readManifest(file) {
         const content = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
         manifest = JSON.parse(content);
     } catch (error) {
-        throw new Error(`Invalid UTF-8 or JSON in manifest: ${error.message}`);
+        throw new Error(`Invalid UTF-8 or JSON in manifest ${JSON.stringify(file)}: ${error.message}`);
     }
-    validateManifest(manifest);
+    try {
+        validateManifest(manifest);
+    } catch (error) {
+        throw new Error(`Invalid manifest ${JSON.stringify(file)}: ${error.message}`);
+    }
     return manifest;
 }
 
@@ -131,9 +137,13 @@ function reportResult(report, json, countKey, countLabel) {
     } else {
         console.log(`${countLabel}: ${count}`);
         for (const [label, paths] of Object.entries(groups)) {
-            console.log(`${label[0].toUpperCase()}${label.slice(1)}: ${paths.length}`);
-            for (const path of paths) {
-                console.log(`  ${JSON.stringify(path)}`);
+            const heading = label === 'possibleMoves' ? 'Possible moves' : label[0].toUpperCase() + label.slice(1);
+            console.log(`${heading}: ${paths.length}`);
+            for (const item of paths) {
+                const detail = typeof item === 'string'
+                    ? JSON.stringify(item)
+                    : `${JSON.stringify(item.from)} -> ${JSON.stringify(item.to)}`;
+                console.log(`  ${detail}`);
             }
         }
     }
@@ -170,34 +180,48 @@ async function main() {
         allowPositionals: true,
         options: {
             help: { type: 'boolean', short: 'h' },
+            version: { type: 'boolean', short: 'v' },
             manifest: { type: 'string' },
             force: { type: 'boolean' },
             json: { type: 'boolean' },
             progress: { type: 'boolean' },
+            'detect-moves': { type: 'boolean' },
         },
     });
     if (values.help) {
         console.log(usage);
         return 0;
     }
-    const [command, folder, after] = positionals;
+    if (values.version) {
+        const packageFile = new URL('../package.json', import.meta.url);
+        const { version } = JSON.parse(await readFile(packageFile, 'utf8'));
+        console.log(version);
+        return 0;
+    }
+    const [command, ...operands] = positionals;
     if (command === 'compare') {
-        if (positionals.length !== 3 || !folder || !after ||
+        const [before, after] = operands;
+        if (operands.length !== 2 || !before || !after ||
             values.manifest !== undefined || values.force || values.progress) {
-            throw new Error('Expected compare <before.json> <after.json> [--json]. See --help.');
+            throw new Error('Expected compare <before.json> <after.json> [--json] [--detect-moves]. See --help.');
         }
         const [previous, current] = await Promise.all([
-            readManifest(resolve(folder)),
+            readManifest(resolve(before)),
             readManifest(resolve(after)),
         ]);
-        return reportResult(compareManifests(previous, current), values.json, 'unchanged', 'Unchanged files');
+        const report = compareManifests(previous, current, { detectMoves: values['detect-moves'] });
+        return reportResult(report, values.json, 'unchanged', 'Unchanged files');
     }
-    if (positionals.length !== 2 || !folder || !values.manifest ||
+    const [folder] = operands;
+    if (operands.length !== 1 || !folder || !values.manifest ||
         !['create', 'verify'].includes(command)) {
         throw new Error('Expected create, verify or compare with its required arguments. See --help.');
     }
     if ((command === 'create' && values.json) || (command === 'verify' && values.force)) {
         throw new Error('--json applies to verify and --force applies to create. See --help.');
+    }
+    if (values['detect-moves']) {
+        throw new Error('--detect-moves applies to compare. See --help.');
     }
 
     const root = resolve(folder);

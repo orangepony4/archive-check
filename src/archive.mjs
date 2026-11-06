@@ -251,11 +251,38 @@ export async function verifyManifest(root, manifest, { excludePath, onProgress }
     return result;
 }
 
-export function compareManifests(previous, current) {
+function uniqueContentPaths(files) {
+    const paths = new Map();
+    for (const { path, size, sha256 } of files) {
+        const signature = `${size}:${sha256}`;
+        paths.set(signature, paths.has(signature) ? null : path);
+    }
+    return paths;
+}
+
+function findPossibleMoves(removedFiles, addedFiles) {
+    const removedPaths = uniqueContentPaths(removedFiles);
+    const addedPaths = uniqueContentPaths(addedFiles);
+    const moves = [];
+    for (const [signature, from] of removedPaths) {
+        const to = addedPaths.get(signature);
+        if (from && to) {
+            moves.push({ from, to });
+        }
+    }
+    moves.sort((a, b) => {
+        if (a.from === b.from) return 0;
+        return a.from < b.from ? -1 : 1;
+    });
+    return moves;
+}
+
+export function compareManifests(previous, current, { detectMoves = false } = {}) {
     validateManifest(previous);
     validateManifest(current);
 
     const remaining = new Map(previous.files.map(file => [unicodePathKey(file.path), file]));
+    const addedFiles = detectMoves ? [] : undefined;
     const result = { unchanged: 0, added: [], removed: [], changed: [] };
     for (const file of current.files) {
         const key = unicodePathKey(file.path);
@@ -263,6 +290,7 @@ export function compareManifests(previous, current) {
         remaining.delete(key);
         if (!prior) {
             result.added.push(file.path);
+            addedFiles?.push(file);
         } else if (prior.size !== file.size || prior.sha256 !== file.sha256) {
             result.changed.push(file.path);
         } else {
@@ -272,5 +300,8 @@ export function compareManifests(previous, current) {
     result.added.sort();
     result.removed = [...remaining.values()].map(file => file.path).sort();
     result.changed.sort();
+    if (addedFiles) {
+        result.possibleMoves = findPossibleMoves(remaining.values(), addedFiles);
+    }
     return result;
 }

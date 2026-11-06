@@ -50,6 +50,8 @@ node bin/archive-check.mjs compare previous.json current.json
 
 The report lists added, removed, and changed paths, plus a count of unchanged files. A rename appears as a removal and an addition. Canonically equivalent Unicode spellings match, while case changes count as renames. Add `--json` for structured output. The exit codes match those of `verify`.
 
+Add `--detect-moves` to list possible renames alongside the raw differences. A candidate needs exactly one removed and one added file with the same size and SHA-256. Groups with duplicate content on either side are left ambiguous.
+
 ## What the inventory covers
 
 - The manifest contains relative paths, byte sizes, and SHA-256 hashes. Keep a trusted copy of it to use as your reference after copying or restoring the folder.
