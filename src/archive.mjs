@@ -24,6 +24,11 @@ function unicodePathKey(path) {
     return path.normalize('NFC');
 }
 
+function comparePathRecords(a, b) {
+    if (a.path === b.path) return 0;
+    return a.path < b.path ? -1 : 1;
+}
+
 function portableNameKey(name) {
     return name.normalize('NFC').toUpperCase().normalize('NFC');
 }
@@ -252,16 +257,25 @@ export async function createManifest(root, { excludePath, onProgress } = {}) {
         files.push({ path: entry.path, size, sha256: await hashFile(entry, buffer) });
         reportProgress?.(size);
     }
-    files.sort((a, b) => {
-        if (a.path === b.path) return 0;
-        return a.path < b.path ? -1 : 1;
-    });
+    files.sort(comparePathRecords);
     const manifest = { version: 1, algorithm: 'sha256', files };
     validateManifest(manifest);
     return manifest;
 }
 
-export async function verifyManifest(root, manifest, { excludePath, onProgress, under } = {}) {
+function recordMismatch(result, entry, expected, actualSha256 = null) {
+    result.changed.push(entry.path);
+    result.details?.push({
+        path: entry.path,
+        reason: actualSha256 === null ? 'size' : 'sha256',
+        expectedSize: String(expected.size),
+        actualSize: entry.stat.size.toString(),
+        expectedSha256: expected.sha256,
+        actualSha256,
+    });
+}
+
+export async function verifyManifest(root, manifest, { excludePath, onProgress, under, details = false } = {}) {
     validateManifest(manifest);
     const scope = parseScope(under);
     const reportProgress = makeProgressReporter(onProgress);
@@ -277,6 +291,7 @@ export async function verifyManifest(root, manifest, { excludePath, onProgress, 
     const actualNames = new Map();
     const unsupportedKeys = new Set();
     const result = { checked: 0, missing: [], changed: [], unexpected: [], unsupported: [] };
+    if (details) result.details = [];
     for await (const entry of walkArchive(root, excludePath, scope)) {
         const key = unicodePathKey(entry.path);
         if (!entry.stat) {
@@ -293,14 +308,14 @@ export async function verifyManifest(root, manifest, { excludePath, onProgress, 
         if (!expected) {
             result.unexpected.push(entry.path);
         } else if (entry.stat.size !== BigInt(expected.size)) {
-            result.changed.push(entry.path);
+            recordMismatch(result, entry, expected);
         } else {
             const sha256 = await hashFile(entry, buffer);
             hashedBytes = expected.size;
             if (sha256 === expected.sha256) {
                 result.checked++;
             } else {
-                result.changed.push(entry.path);
+                recordMismatch(result, entry, expected, sha256);
             }
         }
         reportProgress?.(hashedBytes);
@@ -314,6 +329,7 @@ export async function verifyManifest(root, manifest, { excludePath, onProgress, 
     result.changed.sort();
     result.unexpected.sort();
     result.unsupported.sort();
+    result.details?.sort(comparePathRecords);
     return result;
 }
 

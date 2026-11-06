@@ -9,7 +9,7 @@ import { compareManifests, createManifest, validateManifest, verifyManifest } fr
 
 const usage = `Usage:
   archive-check create <folder> --manifest <file> [--force] [--progress]
-  archive-check verify <folder> --manifest <file> [--under <directory>] [--json] [--progress]
+  archive-check verify <folder> --manifest <file> [--under <directory>] [--details] [--json] [--progress]
   archive-check compare <before.json> <after.json> [--json] [--detect-moves]
   archive-check export-sha256 <manifest.json>
 
@@ -24,6 +24,7 @@ Options:
   --force           Replace an existing valid manifest when creating.
   --progress        Print scan progress to standard error.
   --under <dir>     Verify only the named relative subdirectory.
+  --details         Include the reason, sizes and hashes for changed files.
   --detect-moves    Suggest unique same-content renames during comparison.
   --json            Print the verification or comparison report as JSON.
   -h, --help        Show this help.
@@ -133,6 +134,18 @@ async function writeManifest(file, manifest, previous) {
     }
 }
 
+function formatReportItem(item) {
+    if (typeof item === 'string') return JSON.stringify(item);
+    if (Object.hasOwn(item, 'from')) {
+        return `${JSON.stringify(item.from)} -> ${JSON.stringify(item.to)}`;
+    }
+    const path = JSON.stringify(item.path);
+    if (item.reason === 'size') {
+        return `${path}: expected ${item.expectedSize} bytes, found ${item.actualSize} bytes`;
+    }
+    return `${path}: expected SHA-256 ${item.expectedSha256}, found ${item.actualSha256}`;
+}
+
 function reportResult(report, json, countKey, countLabel) {
     const { [countKey]: count, ...groups } = report;
     if (json) {
@@ -143,10 +156,7 @@ function reportResult(report, json, countKey, countLabel) {
             const heading = label === 'possibleMoves' ? 'Possible moves' : label[0].toUpperCase() + label.slice(1);
             console.log(`${heading}: ${paths.length}`);
             for (const item of paths) {
-                const detail = typeof item === 'string'
-                    ? JSON.stringify(item)
-                    : `${JSON.stringify(item.from)} -> ${JSON.stringify(item.to)}`;
-                console.log(`  ${detail}`);
+                console.log(`  ${formatReportItem(item)}`);
             }
         }
     }
@@ -189,6 +199,7 @@ async function main() {
             json: { type: 'boolean' },
             progress: { type: 'boolean' },
             under: { type: 'string' },
+            details: { type: 'boolean' },
             'detect-moves': { type: 'boolean' },
         },
     });
@@ -206,7 +217,8 @@ async function main() {
     if (command === 'export-sha256') {
         const [file] = operands;
         if (operands.length !== 1 || !file || values.manifest !== undefined
-            || values.force || values.json || values.progress || values['detect-moves'] || values.under !== undefined) {
+            || values.force || values.json || values.progress || values.details || values['detect-moves']
+            || values.under !== undefined) {
             throw new Error('Expected export-sha256 <manifest.json>. See --help.');
         }
         const { files } = await readManifest(resolve(file));
@@ -220,7 +232,7 @@ async function main() {
     if (command === 'compare') {
         const [before, after] = operands;
         if (operands.length !== 2 || !before || !after ||
-            values.manifest !== undefined || values.force || values.progress || values.under !== undefined) {
+            values.manifest !== undefined || values.force || values.progress || values.details || values.under !== undefined) {
             throw new Error('Expected compare <before.json> <after.json> [--json] [--detect-moves]. See --help.');
         }
         const [previous, current] = await Promise.all([
@@ -241,8 +253,8 @@ async function main() {
     if (values['detect-moves']) {
         throw new Error('--detect-moves applies to compare. See --help.');
     }
-    if (command === 'create' && values.under !== undefined) {
-        throw new Error('--under applies to verify. See --help.');
+    if (command === 'create' && (values.under !== undefined || values.details)) {
+        throw new Error('--under and --details apply to verify. See --help.');
     }
 
     const root = resolve(folder);
@@ -259,7 +271,7 @@ async function main() {
     }
 
     const manifest = await readManifest(file);
-    const report = await verifyManifest(root, manifest, { ...options, under: values.under });
+    const report = await verifyManifest(root, manifest, { ...options, under: values.under, details: values.details });
     progress?.finish();
     if (values.under !== undefined && !values.json) {
         console.log(`Scope: ${JSON.stringify(values.under)}`);

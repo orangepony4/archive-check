@@ -377,6 +377,37 @@ test('hashes an entire file across read boundaries and detects a changed last by
     assert.deepEqual(JSON.parse(result.stdout).changed, ['chunks.bin']);
 });
 
+test('optionally explains size and same-size content mismatches', async t => {
+    const { archive, manifest, run } = await fixture(t);
+    const sameSize = join(archive, 'a-content.txt');
+    const otherSize = join(archive, 'z-size.txt');
+    await writeFile(sameSize, 'old');
+    await writeFile(otherSize, 'old');
+    expectExit(run('create', archive, '--manifest', manifest), 0);
+    await writeFile(sameSize, 'new');
+    await writeFile(otherSize, 'longer');
+
+    const result = run('verify', archive, '--manifest', manifest, '--details', '--json');
+    expectExit(result, 1);
+    const report = JSON.parse(result.stdout);
+    const oldHash = manifestEntry('unused', 'old').sha256;
+    assert.deepEqual(report.changed, ['a-content.txt', 'z-size.txt']);
+    assert.deepEqual(report.details, [
+        {
+            path: 'a-content.txt', reason: 'sha256', expectedSize: '3', actualSize: '3',
+            expectedSha256: oldHash, actualSha256: manifestEntry('unused', 'new').sha256,
+        },
+        {
+            path: 'z-size.txt', reason: 'size', expectedSize: '3', actualSize: '6',
+            expectedSha256: oldHash, actualSha256: null,
+        },
+    ]);
+    const text = run('verify', archive, '--manifest', manifest, '--details');
+    expectExit(text, 1);
+    assert.match(text.stdout, /"z-size.txt": expected 3 bytes, found 6 bytes/);
+    assert.match(text.stdout, /"a-content.txt": expected SHA-256/);
+});
+
 test('rejects malformed or unsafe manifests', async t => {
     const { directory, archive, manifest, run } = await fixture(t);
     await writeFile(join(directory, 'outside.txt'), 'outside');

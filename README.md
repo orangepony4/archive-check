@@ -17,10 +17,10 @@ node bin/archive-check.mjs verify "/path/to/copy" --manifest backup.json
 
 On Windows, paths such as `"D:\Photos"` and `"E:\Photos Backup"` work in the same commands. The manifest records paths relative to the archived folder, so the original and the copy can have different locations or drive letters.
 
-To run `archive-check` from any folder, download the `.tgz` from the [releases page](https://github.com/orangepony4/archive-check/releases/latest) and install it with npm. For example, for version 0.3.0:
+To run `archive-check` from any folder, download the `.tgz` from the [releases page](https://github.com/orangepony4/archive-check/releases/latest) and install it with npm. For example, for version 0.4.0:
 
 ```sh
-npm install --global ./archive-check-0.3.0.tgz
+npm install --global ./archive-check-0.4.0.tgz
 archive-check --help
 ```
 
@@ -39,6 +39,8 @@ For a machine-readable report, add `--json` to `verify`.
 `checked` counts files that match both the size and the SHA-256 in the manifest. Verification exits with code `0` for a match, `1` for differences, and `2` for an invalid manifest, an inaccessible folder, or another execution error.
 
 Add `--progress` to either scan command to see the number of paths scanned and bytes hashed so far. Updates appear as files finish and go to standard error, so `verify --json --progress` still writes a clean JSON report to standard output.
+
+Add `--details` to `verify` to see whether a changed file differs in size or SHA-256. In JSON mode, the extra `details` array contains the expected and actual sizes as decimal strings and the hashes. When the size already differs, the file is skipped by the hasher and `actualSha256` is `null`.
 
 ### Check one subdirectory
 
