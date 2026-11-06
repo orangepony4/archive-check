@@ -185,6 +185,27 @@ test('reports changed, missing, and unexpected files together', async t => {
     assert.equal(await readFile(join(archive, 'same-size.txt'), 'utf8'), 'xyz');
 });
 
+test('hashes an entire file across read boundaries and detects a changed last byte', async t => {
+    const { archive, manifest, run } = await fixture(t);
+    const file = join(archive, 'chunks.bin');
+    const bytes = Buffer.alloc(1024 * 1024 + 123);
+    for (let index = 0; index < bytes.length; index++) {
+        bytes[index] = index % 251;
+    }
+    await writeFile(file, bytes);
+    expectExit(run('create', archive, '--manifest', manifest), 0);
+    assert.deepEqual(JSON.parse(await readFile(manifest, 'utf8')).files, [
+        manifestEntry('chunks.bin', bytes),
+    ]);
+    expectExit(run('verify', archive, '--manifest', manifest), 0);
+
+    bytes[bytes.length - 1] ^= 1;
+    await writeFile(file, bytes);
+    const result = run('verify', archive, '--manifest', manifest, '--json');
+    expectExit(result, 1);
+    assert.deepEqual(JSON.parse(result.stdout).changed, ['chunks.bin']);
+});
+
 test('rejects malformed or unsafe manifests', async t => {
     const { directory, archive, manifest, run } = await fixture(t);
     await writeFile(join(directory, 'outside.txt'), 'outside');

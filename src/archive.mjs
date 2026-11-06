@@ -6,6 +6,7 @@ import { isAbsolute, join, resolve } from 'node:path';
 const statOptions = { bigint: true };
 const readFlags = constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0);
 const maxFileSize = BigInt(Number.MAX_SAFE_INTEGER);
+const hashBufferSize = 256 * 1024;
 const windowsDeviceName = /^(?:con|prn|aux|nul|conin\$|conout\$|com[1-9¹²³]|lpt[1-9¹²³])$/i;
 
 function isPortableSegment(segment) {
@@ -124,15 +125,21 @@ async function* walkArchive(root, excludePath) {
     yield* walkDirectory(canonicalRoot, '', stat, exclusion);
 }
 
-async function hashFile({ location, path, stat }) {
+async function hashFile({ location, path, stat }, buffer) {
     const file = await open(location, readFlags);
     try {
         assertUnchanged(stat, await file.stat(statOptions), path);
         const hash = createHash('sha256');
+        const expectedSize = Number(stat.size);
         let bytesRead = 0;
-        for await (const chunk of file.createReadStream({ autoClose: false })) {
-            hash.update(chunk);
-            bytesRead += chunk.length;
+        while (bytesRead <= expectedSize) {
+            // Read at most one byte past the observed size to detect a growing file.
+            const length = Math.min(buffer.length, expectedSize - bytesRead + 1);
+            const { bytesRead: count } = await file.read(buffer, 0, length, null);
+            if (count === 0) break;
+            bytesRead += count;
+            if (bytesRead > expectedSize) break;
+            hash.update(buffer.subarray(0, count));
         }
         assertUnchanged(stat, await file.stat(statOptions), path);
         assertUnchanged(stat, await lstat(location, statOptions), path);
@@ -162,6 +169,7 @@ function makeProgressReporter(onProgress) {
 
 export async function createManifest(root, { excludePath, onProgress } = {}) {
     const reportProgress = makeProgressReporter(onProgress);
+    const buffer = Buffer.allocUnsafe(hashBufferSize);
     const files = [];
     for await (const entry of walkArchive(root, excludePath)) {
         if (!entry.stat) {
@@ -172,7 +180,7 @@ export async function createManifest(root, { excludePath, onProgress } = {}) {
             throw new Error(`Archive entry exceeds the manifest size limit: ${JSON.stringify(entry.path)}.`);
         }
         const size = Number(entry.stat.size);
-        files.push({ path: entry.path, size, sha256: await hashFile(entry) });
+        files.push({ path: entry.path, size, sha256: await hashFile(entry, buffer) });
         reportProgress?.(size);
     }
     files.sort((a, b) => {
@@ -187,6 +195,7 @@ export async function createManifest(root, { excludePath, onProgress } = {}) {
 export async function verifyManifest(root, manifest, { excludePath, onProgress } = {}) {
     validateManifest(manifest);
     const reportProgress = makeProgressReporter(onProgress);
+    const buffer = Buffer.allocUnsafe(hashBufferSize);
     const remaining = new Map(manifest.files.map(file => [file.path, file]));
     const result = { checked: 0, missing: [], changed: [], unexpected: [], unsupported: [] };
     for await (const entry of walkArchive(root, excludePath)) {
@@ -200,7 +209,7 @@ export async function verifyManifest(root, manifest, { excludePath, onProgress }
         } else if (entry.stat.size !== BigInt(expected.size)) {
             result.changed.push(entry.path);
         } else {
-            const sha256 = await hashFile(entry);
+            const sha256 = await hashFile(entry, buffer);
             hashedBytes = expected.size;
             if (sha256 === expected.sha256) {
                 result.checked++;
