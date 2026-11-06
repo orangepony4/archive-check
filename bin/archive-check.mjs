@@ -9,7 +9,7 @@ import { compareManifests, createManifest, validateManifest, verifyManifest } fr
 
 const usage = `Usage:
   archive-check create <folder> --manifest <file> [--force] [--progress]
-  archive-check verify <folder> --manifest <file> [--json] [--progress]
+  archive-check verify <folder> --manifest <file> [--under <directory>] [--json] [--progress]
   archive-check compare <before.json> <after.json> [--json] [--detect-moves]
   archive-check export-sha256 <manifest.json>
 
@@ -23,6 +23,7 @@ Options:
   --manifest <file>  Path to the JSON manifest.
   --force           Replace an existing valid manifest when creating.
   --progress        Print scan progress to standard error.
+  --under <dir>     Verify only the named relative subdirectory.
   --detect-moves    Suggest unique same-content renames during comparison.
   --json            Print the verification or comparison report as JSON.
   -h, --help        Show this help.
@@ -187,6 +188,7 @@ async function main() {
             force: { type: 'boolean' },
             json: { type: 'boolean' },
             progress: { type: 'boolean' },
+            under: { type: 'string' },
             'detect-moves': { type: 'boolean' },
         },
     });
@@ -204,7 +206,7 @@ async function main() {
     if (command === 'export-sha256') {
         const [file] = operands;
         if (operands.length !== 1 || !file || values.manifest !== undefined
-            || values.force || values.json || values.progress || values['detect-moves']) {
+            || values.force || values.json || values.progress || values['detect-moves'] || values.under !== undefined) {
             throw new Error('Expected export-sha256 <manifest.json>. See --help.');
         }
         const { files } = await readManifest(resolve(file));
@@ -218,7 +220,7 @@ async function main() {
     if (command === 'compare') {
         const [before, after] = operands;
         if (operands.length !== 2 || !before || !after ||
-            values.manifest !== undefined || values.force || values.progress) {
+            values.manifest !== undefined || values.force || values.progress || values.under !== undefined) {
             throw new Error('Expected compare <before.json> <after.json> [--json] [--detect-moves]. See --help.');
         }
         const [previous, current] = await Promise.all([
@@ -239,6 +241,9 @@ async function main() {
     if (values['detect-moves']) {
         throw new Error('--detect-moves applies to compare. See --help.');
     }
+    if (command === 'create' && values.under !== undefined) {
+        throw new Error('--under applies to verify. See --help.');
+    }
 
     const root = resolve(folder);
     const file = resolve(values.manifest);
@@ -254,8 +259,11 @@ async function main() {
     }
 
     const manifest = await readManifest(file);
-    const report = await verifyManifest(root, manifest, options);
+    const report = await verifyManifest(root, manifest, { ...options, under: values.under });
     progress?.finish();
+    if (values.under !== undefined && !values.json) {
+        console.log(`Scope: ${JSON.stringify(values.under)}`);
+    }
     return reportResult(report, values.json, 'checked', 'Matching files');
 }
 

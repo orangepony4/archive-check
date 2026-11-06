@@ -28,6 +28,18 @@ function portableNameKey(name) {
     return name.normalize('NFC').toUpperCase().normalize('NFC');
 }
 
+function parseScope(under) {
+    if (under === undefined) return undefined;
+    if (typeof under !== 'string') {
+        throw new Error('Archive scope must be a portable relative directory.');
+    }
+    const parts = under.split('/');
+    if (!parts.every(isPortableSegment)) {
+        throw new Error(`Unsafe or nonportable archive scope ${JSON.stringify(under)}.`);
+    }
+    return { path: under, parts: parts.map(unicodePathKey), prefix: `${unicodePathKey(under)}/` };
+}
+
 function registerPath(names, segments, keyForName, source) {
     // Track directory spellings too, so aliases with disjoint children cannot merge.
     for (let index = 0; index < segments.length; index++) {
@@ -105,9 +117,6 @@ async function* walkDirectory(absolutePath, archivePath, directoryStat, excludeP
 
 async function resolveExclusion(excludePath) {
     if (excludePath === undefined) return undefined;
-    if (typeof excludePath !== 'string' || !isAbsolute(excludePath)) {
-        throw new Error('The excluded manifest path must be absolute.');
-    }
 
     const location = resolve(excludePath);
     let stat;
@@ -124,16 +133,65 @@ async function resolveExclusion(excludePath) {
     return canonicalPath;
 }
 
-async function* walkArchive(root, excludePath) {
+async function findScopeName(absolutePath, archivePath, part) {
+    const names = await readdir(absolutePath, { encoding: 'buffer' });
+    let match;
+    for (const bytes of names) {
+        const name = bytes.toString('utf8');
+        if (unicodePathKey(name) !== part || !Buffer.from(name).equals(bytes)) continue;
+        if (match !== undefined) {
+            throw new Error(`Multiple archive entries match scope component ${JSON.stringify(part)} in ${JSON.stringify(archivePath || '.')}.`);
+        }
+        match = name;
+    }
+    return match;
+}
+
+async function* walkScopedDirectory(absolutePath, archivePath, directoryStat, parts, depth, excludePath) {
+    if (depth === parts.length) {
+        const exclusion = await resolveExclusion(excludePath);
+        assertUnchanged(directoryStat, await lstat(absolutePath, statOptions), archivePath);
+        yield* walkDirectory(absolutePath, archivePath, directoryStat, exclusion);
+        return true;
+    }
+
+    const name = await findScopeName(absolutePath, archivePath, parts[depth]);
+    assertUnchanged(directoryStat, await lstat(absolutePath, statOptions), archivePath);
+    if (name === undefined) return false;
+
+    const location = join(absolutePath, name);
+    const path = archivePath ? `${archivePath}/${name}` : name;
+    const stat = await lstat(location, statOptions);
+    let found = true;
+    if (stat.isDirectory()) {
+        found = yield* walkScopedDirectory(location, path, stat, parts, depth + 1, excludePath);
+    } else {
+        yield { path };
+    }
+    assertUnchanged(directoryStat, await lstat(absolutePath, statOptions), archivePath);
+    return found;
+}
+
+async function* walkArchive(root, excludePath, scope) {
     const absoluteRoot = resolve(root);
     const stat = await lstat(absoluteRoot, statOptions);
     if (!stat.isDirectory()) {
         throw new Error('The archive root must be a regular directory.');
     }
     const canonicalRoot = await realpath(absoluteRoot);
-    const exclusion = await resolveExclusion(excludePath);
+    if (excludePath !== undefined && (typeof excludePath !== 'string' || !isAbsolute(excludePath))) {
+        throw new Error('The excluded manifest path must be absolute.');
+    }
+    const exclusion = scope ? undefined : await resolveExclusion(excludePath);
     assertUnchanged(stat, await lstat(canonicalRoot, statOptions), '.');
-    yield* walkDirectory(canonicalRoot, '', stat, exclusion);
+    if (!scope) {
+        yield* walkDirectory(canonicalRoot, '', stat, exclusion);
+        return;
+    }
+    const found = yield* walkScopedDirectory(canonicalRoot, '', stat, scope.parts, 0, excludePath);
+    if (!found && !scope.allowMissing) {
+        throw new Error(`Archive scope does not exist: ${JSON.stringify(scope.path)}.`);
+    }
 }
 
 async function hashFile({ location, path, stat }, buffer) {
@@ -203,15 +261,23 @@ export async function createManifest(root, { excludePath, onProgress } = {}) {
     return manifest;
 }
 
-export async function verifyManifest(root, manifest, { excludePath, onProgress } = {}) {
+export async function verifyManifest(root, manifest, { excludePath, onProgress, under } = {}) {
     validateManifest(manifest);
+    const scope = parseScope(under);
     const reportProgress = makeProgressReporter(onProgress);
     const buffer = Buffer.allocUnsafe(hashBufferSize);
-    const remaining = new Map(manifest.files.map(file => [unicodePathKey(file.path), file]));
+    const remaining = new Map();
+    for (const file of manifest.files) {
+        const key = unicodePathKey(file.path);
+        if (!scope || key.startsWith(scope.prefix)) {
+            remaining.set(key, file);
+        }
+    }
+    if (scope) scope.allowMissing = remaining.size > 0;
     const actualNames = new Map();
     const unsupportedKeys = new Set();
     const result = { checked: 0, missing: [], changed: [], unexpected: [], unsupported: [] };
-    for await (const entry of walkArchive(root, excludePath)) {
+    for await (const entry of walkArchive(root, excludePath, scope)) {
         const key = unicodePathKey(entry.path);
         if (!entry.stat) {
             unsupportedKeys.add(key);
