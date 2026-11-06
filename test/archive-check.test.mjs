@@ -105,6 +105,41 @@ test('creates and verifies an empty manifest for an empty archive', async t => {
     });
 });
 
+test('compares two manifests without reading either archive', async t => {
+    const { directory, run } = await fixture(t);
+    const before = join(directory, 'before.json');
+    const after = join(directory, 'after.json');
+    const manifest = files => JSON.stringify({ version: 1, algorithm: 'sha256', files });
+    await writeFile(before, manifest([
+        manifestEntry('removed.txt', 'gone'),
+        manifestEntry('stable.txt', 'same'),
+        manifestEntry('changed.txt', 'before'),
+    ]));
+    await writeFile(after, manifest([
+        manifestEntry('zeta.txt', 'added'),
+        manifestEntry('changed.txt', 'second'),
+        manifestEntry('alpha.txt', 'added'),
+        manifestEntry('stable.txt', 'same'),
+    ]));
+
+    const different = run('compare', before, after, '--json');
+    expectExit(different, 1);
+    assert.deepEqual(JSON.parse(different.stdout), {
+        unchanged: 1,
+        added: ['alpha.txt', 'zeta.txt'],
+        removed: ['removed.txt'],
+        changed: ['changed.txt'],
+    });
+    const identical = run('compare', before, before, '--json');
+    expectExit(identical, 0);
+    assert.deepEqual(JSON.parse(identical.stdout), {
+        unchanged: 3, added: [], removed: [], changed: [],
+    });
+    expectExit(run('compare', before, after, '--force'), 2);
+    await writeFile(after, '{}');
+    expectExit(run('compare', before, after, '--json'), 2);
+});
+
 test('reports changed, missing, and unexpected files together', async t => {
     const { archive, manifest, run } = await fixture(t);
     await writeFile(join(archive, 'same-size.txt'), 'abc');

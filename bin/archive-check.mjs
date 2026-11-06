@@ -5,20 +5,22 @@ import { constants } from 'node:fs';
 import { copyFile, link, lstat, open, rename, rm } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
-import { createManifest, validateManifest, verifyManifest } from '../src/archive.mjs';
+import { compareManifests, createManifest, validateManifest, verifyManifest } from '../src/archive.mjs';
 
 const usage = `Usage:
   archive-check create <folder> --manifest <file> [--force]
   archive-check verify <folder> --manifest <file> [--json]
+  archive-check compare <before.json> <after.json> [--json]
 
 Commands:
   create   Record relative paths, sizes and SHA-256 hashes.
   verify   Report missing, changed, unexpected or unsupported paths.
+  compare  Report added, removed and changed paths between two manifests.
 
 Options:
   --manifest <file>  Path to the JSON manifest.
   --force           Replace an existing valid manifest when creating.
-  --json            Print the verification report as JSON.
+  --json            Print the verification or comparison report as JSON.
   -h, --help        Show this help.`;
 
 async function statIfPresent(file) {
@@ -112,15 +114,20 @@ async function writeManifest(file, manifest, previous) {
     }
 }
 
-function printReport(report) {
-    console.log(`Matching files: ${report.checked}`);
-    for (const [label, paths] of Object.entries(report)) {
-        if (label === 'checked') continue;
-        console.log(`${label[0].toUpperCase()}${label.slice(1)}: ${paths.length}`);
-        for (const path of paths) {
-            console.log(`  ${JSON.stringify(path)}`);
+function reportResult(report, json, countKey, countLabel) {
+    const { [countKey]: count, ...groups } = report;
+    if (json) {
+        console.log(JSON.stringify(report, null, 2));
+    } else {
+        console.log(`${countLabel}: ${count}`);
+        for (const [label, paths] of Object.entries(groups)) {
+            console.log(`${label[0].toUpperCase()}${label.slice(1)}: ${paths.length}`);
+            for (const path of paths) {
+                console.log(`  ${JSON.stringify(path)}`);
+            }
         }
     }
+    return Object.values(groups).some(paths => paths.length > 0) ? 1 : 0;
 }
 
 async function main() {
@@ -137,10 +144,21 @@ async function main() {
         console.log(usage);
         return 0;
     }
-    const [command, folder] = positionals;
+    const [command, folder, after] = positionals;
+    if (command === 'compare') {
+        if (positionals.length !== 3 || !folder || !after ||
+            values.manifest !== undefined || values.force) {
+            throw new Error('Expected compare <before.json> <after.json> [--json]. See --help.');
+        }
+        const [previous, current] = await Promise.all([
+            readManifest(resolve(folder)),
+            readManifest(resolve(after)),
+        ]);
+        return reportResult(compareManifests(previous, current), values.json, 'unchanged', 'Unchanged files');
+    }
     if (positionals.length !== 2 || !folder || !values.manifest ||
         !['create', 'verify'].includes(command)) {
-        throw new Error('Expected create or verify, a folder and --manifest <file>. See --help.');
+        throw new Error('Expected create, verify or compare with its required arguments. See --help.');
     }
     if ((command === 'create' && values.json) || (command === 'verify' && values.force)) {
         throw new Error('--json applies to verify and --force applies to create. See --help.');
@@ -158,13 +176,7 @@ async function main() {
 
     const manifest = await readManifest(file);
     const report = await verifyManifest(root, manifest, { excludePath: file });
-    if (values.json) {
-        console.log(JSON.stringify(report, null, 2));
-    } else {
-        printReport(report);
-    }
-    return report.missing.length || report.changed.length ||
-        report.unexpected.length || report.unsupported.length ? 1 : 0;
+    return reportResult(report, values.json, 'checked', 'Matching files');
 }
 
 try {

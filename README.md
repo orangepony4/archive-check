@@ -29,6 +29,16 @@ For a machine-readable report, add `--json` to `verify`.
 
 `checked` counts files that match both the size and the SHA-256 in the manifest. Verification exits with code `0` for a match, `1` for differences, and `2` for an invalid manifest, an inaccessible folder, or another execution error.
 
+## Compare two snapshots
+
+Use `compare` when you have two manifests and want to see what changed without reading either folder.
+
+```sh
+node bin/archive-check.mjs compare previous.json current.json
+```
+
+The report lists added, removed, and changed paths, plus a count of unchanged files. Paths are matched exactly, so renaming a file appears as a removal and an addition. Add `--json` for structured output. The exit codes match those of `verify`.
+
 ## What the inventory covers
 
 - The manifest contains relative paths, byte sizes, and SHA-256 hashes. Keep a trusted copy of it to use as your reference after copying or restoring the folder.

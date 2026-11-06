@@ -156,7 +156,10 @@ export async function createManifest(root, { excludePath } = {}) {
         }
         files.push({ path: entry.path, size: Number(entry.stat.size), sha256: await hashFile(entry) });
     }
-    files.sort((a, b) => a.path < b.path ? -1 : Number(a.path > b.path));
+    files.sort((a, b) => {
+        if (a.path === b.path) return 0;
+        return a.path < b.path ? -1 : 1;
+    });
     const manifest = { version: 1, algorithm: 'sha256', files };
     validateManifest(manifest);
     return manifest;
@@ -183,5 +186,28 @@ export async function verifyManifest(root, manifest, { excludePath } = {}) {
     result.changed.sort();
     result.unexpected.sort();
     result.unsupported.sort();
+    return result;
+}
+
+export function compareManifests(previous, current) {
+    validateManifest(previous);
+    validateManifest(current);
+
+    const remaining = new Map(previous.files.map(file => [file.path, file]));
+    const result = { unchanged: 0, added: [], removed: [], changed: [] };
+    for (const file of current.files) {
+        const prior = remaining.get(file.path);
+        remaining.delete(file.path);
+        if (!prior) {
+            result.added.push(file.path);
+        } else if (prior.size !== file.size || prior.sha256 !== file.sha256) {
+            result.changed.push(file.path);
+        } else {
+            result.unchanged++;
+        }
+    }
+    result.added.sort();
+    result.removed = [...remaining.keys()].sort();
+    result.changed.sort();
     return result;
 }
