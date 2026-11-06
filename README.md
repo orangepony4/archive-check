@@ -1,5 +1,7 @@
 # Archive Check
 
+[![Tests](https://github.com/orangepony4/archive-check/actions/workflows/test.yml/badge.svg)](https://github.com/orangepony4/archive-check/actions/workflows/test.yml)
+
 Create a SHA-256 inventory of a folder, then check another copy against it. Archive Check detects missing files, extra files, and content changes even when the file sizes still match. It runs locally and works with any regular file type.
 
 ## Quick start
@@ -14,6 +16,13 @@ node bin/archive-check.mjs verify "/path/to/copy" --manifest backup.json
 ```
 
 On Windows, paths such as `"D:\Photos"` and `"E:\Photos Backup"` work in the same commands. The manifest records paths relative to the archived folder, so the original and the copy can have different locations or drive letters.
+
+To run `archive-check` from any folder, download the `.tgz` from the [releases page](https://github.com/orangepony4/archive-check/releases/latest) and install it with npm. For example, for version 0.1.0:
+
+```sh
+npm install --global ./archive-check-0.1.0.tgz
+archive-check --help
+```
 
 For a machine-readable report, add `--json` to `verify`.
 
@@ -44,7 +53,7 @@ The report lists added, removed, and changed paths, plus a count of unchanged fi
 ## What the inventory covers
 
 - The manifest contains relative paths, byte sizes, and SHA-256 hashes. Keep a trusted copy of it to use as your reference after copying or restoring the folder.
-- If the manifest is stored inside the archive, Archive Check excludes the manifest file itself. The same archive yields the same manifest while the paths and bytes stay the same.
+- Archive Check excludes the exact file passed with `--manifest` if it is inside the scanned folder. Store the reference manifest outside both copies if you want to verify their contents independently of the manifest. The same archive yields the same manifest while the paths and bytes stay the same.
 - Empty directories, permissions, timestamps, and NTFS alternate data streams are outside the inventory. Creating a manifest rejects symbolic links and special files. Verification reports them under `unsupported`.
 - Both commands read the archived files. `create` writes the specified manifest and protects any existing file there. Use `--force` to replace a valid Archive Check manifest after intentionally changing the reference snapshot.
 - Scan a stable folder after a copy finishes. A scan reads files one at a time and cannot take a filesystem snapshot.
@@ -65,7 +74,7 @@ The report lists added, removed, and changed paths, plus a count of unchanged fi
 }
 ```
 
-Manifests use UTF-8 JSON. Each path is relative to the archive and uses `/` as its separator. Paths are case-sensitive. The size is a non-negative safe integer in bytes, and the hash contains 64 lowercase hexadecimal characters. Archive Check rejects conflicting names, path traversal, and Windows-reserved path segments.
+Manifests use UTF-8 JSON. Each path is relative to the archive and uses `/` as its separator. Paths are case-sensitive. The size is a non-negative safe integer in bytes, and the hash contains 64 lowercase hexadecimal characters. Archive Check rejects conflicting names, path traversal, and Windows-reserved path segments. The destination filesystem still determines which filename lengths it can store.
 
 ## Development
 

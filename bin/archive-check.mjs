@@ -2,7 +2,7 @@
 
 import { randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
-import { copyFile, link, lstat, open, rename, rm } from 'node:fs/promises';
+import { copyFile, link, lstat, open, rename, rm, stat } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { compareManifests, createManifest, validateManifest, verifyManifest } from '../src/archive.mjs';
@@ -70,6 +70,14 @@ function sameFile(before, after) {
 }
 
 async function checkDestination(file, force) {
+    const parent = dirname(file);
+    const parentStat = await stat(parent).catch(error => {
+        if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return null;
+        throw error;
+    });
+    if (!parentStat?.isDirectory()) {
+        throw new Error(`Manifest destination directory does not exist: ${parent}`);
+    }
     const existing = await statIfPresent(file);
     if (!existing) return null;
     if (!force) {

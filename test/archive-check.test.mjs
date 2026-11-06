@@ -250,6 +250,15 @@ test('requires --force to replace a valid manifest and preserves unrelated outpu
     assert.equal(await readFile(manifest, 'utf8'), 'unrelated user data');
 });
 
+test('explains an invalid manifest destination before scanning the archive', async t => {
+    const { directory, run } = await fixture(t);
+    const invalidManifest = join(directory, 'missing-parent', 'checksums.json');
+    const result = run('create', 'also-missing-archive', '--manifest', invalidManifest);
+    expectExit(result, 2);
+    assert.match(result.stderr, /Manifest destination directory does not exist/);
+    await assert.rejects(readFile(invalidManifest), { code: 'ENOENT' });
+});
+
 test('will not overwrite a symlink to an existing valid manifest', async t => {
     const { directory, archive, manifest, run } = await fixture(t);
     await writeFile(join(archive, 'file.txt'), 'before');
