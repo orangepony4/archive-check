@@ -145,16 +145,35 @@ async function hashFile({ location, path, stat }) {
     }
 }
 
-export async function createManifest(root, { excludePath } = {}) {
+function makeProgressReporter(onProgress) {
+    if (onProgress === undefined) return undefined;
+    if (typeof onProgress !== 'function') {
+        throw new TypeError('onProgress must be a function.');
+    }
+
+    let scanned = 0;
+    let hashedBytes = 0;
+    return (bytes = 0) => {
+        scanned++;
+        hashedBytes += bytes;
+        onProgress({ scanned, hashedBytes });
+    };
+}
+
+export async function createManifest(root, { excludePath, onProgress } = {}) {
+    const reportProgress = makeProgressReporter(onProgress);
     const files = [];
     for await (const entry of walkArchive(root, excludePath)) {
         if (!entry.stat) {
+            reportProgress?.();
             throw new Error(`Unsupported archive entry ${JSON.stringify(entry.path)}.`);
         }
         if (entry.stat.size > maxFileSize) {
             throw new Error(`Archive entry exceeds the manifest size limit: ${JSON.stringify(entry.path)}.`);
         }
-        files.push({ path: entry.path, size: Number(entry.stat.size), sha256: await hashFile(entry) });
+        const size = Number(entry.stat.size);
+        files.push({ path: entry.path, size, sha256: await hashFile(entry) });
+        reportProgress?.(size);
     }
     files.sort((a, b) => {
         if (a.path === b.path) return 0;
@@ -165,22 +184,31 @@ export async function createManifest(root, { excludePath } = {}) {
     return manifest;
 }
 
-export async function verifyManifest(root, manifest, { excludePath } = {}) {
+export async function verifyManifest(root, manifest, { excludePath, onProgress } = {}) {
     validateManifest(manifest);
+    const reportProgress = makeProgressReporter(onProgress);
     const remaining = new Map(manifest.files.map(file => [file.path, file]));
     const result = { checked: 0, missing: [], changed: [], unexpected: [], unsupported: [] };
     for await (const entry of walkArchive(root, excludePath)) {
         const expected = remaining.get(entry.path);
         remaining.delete(entry.path);
+        let hashedBytes = 0;
         if (!entry.stat) {
             result.unsupported.push(entry.path);
         } else if (!expected) {
             result.unexpected.push(entry.path);
-        } else if (entry.stat.size !== BigInt(expected.size) || await hashFile(entry) !== expected.sha256) {
+        } else if (entry.stat.size !== BigInt(expected.size)) {
             result.changed.push(entry.path);
         } else {
-            result.checked++;
+            const sha256 = await hashFile(entry);
+            hashedBytes = expected.size;
+            if (sha256 === expected.sha256) {
+                result.checked++;
+            } else {
+                result.changed.push(entry.path);
+            }
         }
+        reportProgress?.(hashedBytes);
     }
     result.missing = [...remaining.keys()].sort();
     result.changed.sort();

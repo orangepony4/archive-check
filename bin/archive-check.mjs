@@ -8,8 +8,8 @@ import { parseArgs } from 'node:util';
 import { compareManifests, createManifest, validateManifest, verifyManifest } from '../src/archive.mjs';
 
 const usage = `Usage:
-  archive-check create <folder> --manifest <file> [--force]
-  archive-check verify <folder> --manifest <file> [--json]
+  archive-check create <folder> --manifest <file> [--force] [--progress]
+  archive-check verify <folder> --manifest <file> [--json] [--progress]
   archive-check compare <before.json> <after.json> [--json]
 
 Commands:
@@ -20,6 +20,7 @@ Commands:
 Options:
   --manifest <file>  Path to the JSON manifest.
   --force           Replace an existing valid manifest when creating.
+  --progress        Print scan progress to standard error.
   --json            Print the verification or comparison report as JSON.
   -h, --help        Show this help.`;
 
@@ -130,6 +131,31 @@ function reportResult(report, json, countKey, countLabel) {
     return Object.values(groups).some(paths => paths.length > 0) ? 1 : 0;
 }
 
+function createProgressReporter() {
+    let latest = { scanned: 0, hashedBytes: 0 };
+    let lastPrinted;
+    let nextUpdate = performance.now() + 1000;
+
+    function print() {
+        if (latest !== lastPrinted) {
+            console.error(`Scanned ${latest.scanned} paths; hashed ${latest.hashedBytes} bytes.`);
+            lastPrinted = latest;
+        }
+    }
+
+    return {
+        onProgress(summary) {
+            latest = summary;
+            const now = performance.now();
+            if (now >= nextUpdate) {
+                print();
+                nextUpdate = now + 1000;
+            }
+        },
+        finish: print,
+    };
+}
+
 async function main() {
     const { values, positionals } = parseArgs({
         allowPositionals: true,
@@ -138,6 +164,7 @@ async function main() {
             manifest: { type: 'string' },
             force: { type: 'boolean' },
             json: { type: 'boolean' },
+            progress: { type: 'boolean' },
         },
     });
     if (values.help) {
@@ -147,7 +174,7 @@ async function main() {
     const [command, folder, after] = positionals;
     if (command === 'compare') {
         if (positionals.length !== 3 || !folder || !after ||
-            values.manifest !== undefined || values.force) {
+            values.manifest !== undefined || values.force || values.progress) {
             throw new Error('Expected compare <before.json> <after.json> [--json]. See --help.');
         }
         const [previous, current] = await Promise.all([
@@ -166,16 +193,20 @@ async function main() {
 
     const root = resolve(folder);
     const file = resolve(values.manifest);
+    const progress = values.progress ? createProgressReporter() : undefined;
+    const options = { excludePath: file, onProgress: progress?.onProgress };
     if (command === 'create') {
         const previous = await checkDestination(file, values.force);
-        const manifest = await createManifest(root, { excludePath: file });
+        const manifest = await createManifest(root, options);
         await writeManifest(file, manifest, previous);
+        progress?.finish();
         console.log(`Wrote ${manifest.files.length} file entries to ${file}`);
         return 0;
     }
 
     const manifest = await readManifest(file);
-    const report = await verifyManifest(root, manifest, { excludePath: file });
+    const report = await verifyManifest(root, manifest, options);
+    progress?.finish();
     return reportResult(report, values.json, 'checked', 'Matching files');
 }
 

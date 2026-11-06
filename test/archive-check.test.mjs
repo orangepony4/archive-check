@@ -105,6 +105,24 @@ test('creates and verifies an empty manifest for an empty archive', async t => {
     });
 });
 
+test('sends progress to standard error without disturbing JSON output', async t => {
+    const { archive, manifest, run } = await fixture(t);
+    await writeFile(join(archive, 'match.txt'), 'abc');
+    await writeFile(join(archive, 'size-change.txt'), 'before');
+    const created = run('create', archive, '--manifest', manifest, '--progress');
+    expectExit(created, 0);
+    assert.match(created.stderr, /Scanned 2 paths; hashed 9 bytes\./);
+
+    await writeFile(join(archive, 'size-change.txt'), 'longer than before');
+    await writeFile(join(archive, 'extra.txt'), 'ignored');
+    const verified = run('verify', archive, '--manifest', manifest, '--json', '--progress');
+    expectExit(verified, 1);
+    assert.match(verified.stderr, /Scanned 3 paths; hashed 3 bytes\./);
+    assert.deepEqual(JSON.parse(verified.stdout), {
+        checked: 1, missing: [], changed: ['size-change.txt'], unexpected: ['extra.txt'], unsupported: [],
+    });
+});
+
 test('compares two manifests without reading either archive', async t => {
     const { directory, run } = await fixture(t);
     const before = join(directory, 'before.json');

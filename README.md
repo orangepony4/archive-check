@@ -29,6 +29,8 @@ For a machine-readable report, add `--json` to `verify`.
 
 `checked` counts files that match both the size and the SHA-256 in the manifest. Verification exits with code `0` for a match, `1` for differences, and `2` for an invalid manifest, an inaccessible folder, or another execution error.
 
+Add `--progress` to either scan command to see the number of paths scanned and bytes hashed so far. Updates appear as files finish and go to standard error, so `verify --json --progress` still writes a clean JSON report to standard output.
+
 ## Compare two snapshots
 
 Use `compare` when you have two manifests and want to see what changed without reading either folder.
