@@ -95,6 +95,8 @@ function assertUnchanged(before, after, path) {
 
 async function* walkDirectory(absolutePath, archivePath, directoryStat, excludePath) {
     const names = await readdir(absolutePath, { encoding: 'buffer' });
+    // Detect a directory replacement before following any of the enumerated names.
+    assertUnchanged(directoryStat, await lstat(absolutePath, statOptions), archivePath);
     for (const bytes of names) {
         const name = bytes.toString('utf8');
         if (!Buffer.from(name).equals(bytes)) {
