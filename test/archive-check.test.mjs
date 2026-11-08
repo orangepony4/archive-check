@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, readdir, readFile, realpath, rm, rmdir, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, toNamespacedPath } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
@@ -89,6 +89,39 @@ test('creates a portable sorted manifest and verifies it inside the archive', as
     assert.deepEqual(JSON.parse(result.stdout), {
         checked: 4, changed: [], missing: [], unexpected: [], unsupported: [],
     });
+});
+
+test('excludes the exact in-tree manifest even when its own name is nonportable', async t => {
+    const { archive, run } = await fixture(t);
+    const metadata = join(archive, 'metadata');
+    await mkdir(metadata);
+    // A trailing dot is ordinary on POSIX and needs a literal Windows path.
+    const manifest = toNamespacedPath(join(metadata, 'backup.'));
+    await writeFile(join(metadata, 'data.txt'), 'original');
+
+    expectExit(run('create', archive, '--manifest', manifest), 0);
+    const original = await readFile(manifest, 'utf8');
+    assert.deepEqual(JSON.parse(original).files, [manifestEntry('metadata/data.txt', 'original')]);
+
+    for (const scope of [[], ['--under', 'metadata']]) {
+        const verified = run('verify', archive, '--manifest', manifest, '--json', ...scope);
+        expectExit(verified, 0);
+        assert.deepEqual(JSON.parse(verified.stdout), {
+            checked: 1, missing: [], changed: [], unexpected: [], unsupported: [],
+        });
+    }
+
+    expectExit(run('create', archive, '--manifest', manifest, '--force'), 0);
+    assert.equal(await readFile(manifest, 'utf8'), original);
+
+    await writeFile(toNamespacedPath(join(metadata, 'unrelated.')), 'not a manifest');
+    const verified = run('verify', archive, '--manifest', manifest, '--json');
+    expectExit(verified, 1);
+    assert.deepEqual(JSON.parse(verified.stdout).unsupported, ['metadata/unrelated.']);
+    const refused = run('create', archive, '--manifest', manifest, '--force');
+    expectExit(refused, 2);
+    assert.match(refused.stderr, /Unsupported archive entry "metadata\/unrelated\."/);
+    assert.equal(await readFile(manifest, 'utf8'), original);
 });
 
 test('creates and verifies an empty manifest for an empty archive', async t => {

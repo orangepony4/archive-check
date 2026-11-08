@@ -103,18 +103,18 @@ async function* walkDirectory(absolutePath, archivePath, directoryStat, excludeP
             throw new Error(`Directory ${JSON.stringify(archivePath || '.')} contains a name that is invalid UTF-8 (hex: ${bytes.toString('hex')}).`);
         }
         const path = archivePath ? `${archivePath}/${name}` : name;
+        const location = join(absolutePath, name);
+        // The manifest is outside the inventory, so its own name need not be portable.
+        if (location === excludePath && (await lstat(location, statOptions)).isFile()) continue;
         if (!isPortableSegment(name)) {
             yield { path };
             continue;
         }
-        const location = join(absolutePath, name);
         const stat = await lstat(location, statOptions);
         if (stat.isDirectory()) {
             yield* walkDirectory(location, path, stat, excludePath);
         } else if (stat.isFile()) {
-            if (location !== excludePath) {
-                yield { path, location, stat };
-            }
+            yield { path, location, stat };
         } else {
             yield { path };
         }
