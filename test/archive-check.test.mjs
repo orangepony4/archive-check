@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { once } from 'node:events';
 import { mkdir, mkdtemp, readdir, readFile, realpath, rm, rmdir, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, toNamespacedPath } from 'node:path';
@@ -284,6 +285,24 @@ test('exports a sorted binary checksum list without reading the archive', async 
     assert.equal(result.stderr, '');
     assert.equal(result.stdout,
         `${dash.sha256} *./-\n${spacedUnicode.sha256} *${spacedUnicode.path}\n${zeta.sha256} *${zeta.path}\n`);
+});
+
+test('reports a closed output pipe as an execution error', async t => {
+    const { directory, manifest } = await fixture(t);
+    await writeFile(manifest, JSON.stringify({
+        version: 1, algorithm: 'sha256', files: [manifestEntry('file.txt', 'data')],
+    }));
+    const child = spawn(process.execPath, [cliPath, 'export-sha256', manifest], {
+        cwd: directory, stdio: ['ignore', 'pipe', 'pipe'], timeout: 10_000, windowsHide: true,
+    });
+    child.stdout.destroy();
+    let stderr = '';
+    child.stderr.setEncoding('utf8').on('data', chunk => { stderr += chunk; });
+
+    const [status, signal] = await once(child, 'close');
+    assert.equal(signal, null);
+    assert.equal(status, 2, stderr);
+    assert.match(stderr, /^archive-check: Could not write standard output: [^\r\n]+\r?\n$/);
 });
 
 test('exports an empty list and rejects malformed input or unrelated options', async t => {

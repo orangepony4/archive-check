@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
 import { copyFile, link, lstat, open, readFile, rename, rm, stat } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
+import { pipeline } from 'node:stream/promises';
 import { parseArgs } from 'node:util';
 import { compareManifests, createManifest, validateManifest, verifyManifest } from '../src/archive.mjs';
 
@@ -136,6 +137,16 @@ async function writeManifest(file, manifest, previous) {
     }
 }
 
+async function writeOutput(lines) {
+    try {
+        await pipeline(function* () {
+            for (const line of lines) yield `${line}\n`;
+        }, process.stdout);
+    } catch (error) {
+        throw new Error(`Could not write standard output: ${error.message}`, { cause: error });
+    }
+}
+
 function formatReportItem(item) {
     if (typeof item === 'string') return JSON.stringify(item);
     if (Object.hasOwn(item, 'from')) {
@@ -148,21 +159,29 @@ function formatReportItem(item) {
     return `${path}: expected SHA-256 ${item.expectedSha256}, found ${item.actualSha256}`;
 }
 
-function reportResult(report, json, countKey, countLabel) {
-    const { [countKey]: count, ...groups } = report;
-    if (json) {
-        console.log(JSON.stringify(report, null, 2));
-    } else {
-        console.log(`${countLabel}: ${count}`);
-        for (const [label, paths] of Object.entries(groups)) {
-            const heading = label === 'possibleMoves' ? 'Possible moves' : label[0].toUpperCase() + label.slice(1);
-            console.log(`${heading}: ${paths.length}`);
-            for (const item of paths) {
-                console.log(`  ${formatReportItem(item)}`);
-            }
+function* reportLines(countLabel, count, groups, scope) {
+    if (scope !== undefined) yield `Scope: ${JSON.stringify(scope)}`;
+    yield `${countLabel}: ${count}`;
+    for (const [label, paths] of Object.entries(groups)) {
+        const heading = label === 'possibleMoves' ? 'Possible moves' : label[0].toUpperCase() + label.slice(1);
+        yield `${heading}: ${paths.length}`;
+        for (const item of paths) {
+            yield `  ${formatReportItem(item)}`;
         }
     }
+}
+
+async function reportResult(report, json, countKey, countLabel, scope) {
+    const { [countKey]: count, ...groups } = report;
+    await writeOutput(json ? [JSON.stringify(report, null, 2)] : reportLines(countLabel, count, groups, scope));
     return Object.values(groups).some(paths => paths.length > 0) ? 1 : 0;
+}
+
+function* checksumLines(files) {
+    for (const { path, sha256 } of files) {
+        // GNU sha256sum interprets a lone dash as standard input.
+        yield `${sha256} *${path === '-' ? './-' : path}`;
+    }
 }
 
 function createProgressReporter() {
@@ -206,13 +225,13 @@ async function main() {
         },
     });
     if (values.help) {
-        console.log(usage);
+        await writeOutput([usage]);
         return 0;
     }
     if (values.version) {
         const packageFile = new URL('../package.json', import.meta.url);
         const { version } = JSON.parse(await readFile(packageFile, 'utf8'));
-        console.log(version);
+        await writeOutput([version]);
         return 0;
     }
     const [command, ...operands] = positionals;
@@ -225,10 +244,7 @@ async function main() {
         }
         const { files } = await readManifest(resolve(file));
         files.sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
-        for (const { path, sha256 } of files) {
-            // GNU sha256sum interprets a lone dash as standard input.
-            console.log(`${sha256} *${path === '-' ? './-' : path}`);
-        }
+        await writeOutput(checksumLines(files));
         return 0;
     }
     if (command === 'compare') {
@@ -268,17 +284,14 @@ async function main() {
         const manifest = await createManifest(root, options);
         await writeManifest(file, manifest, previous);
         progress?.finish();
-        console.log(`Wrote ${manifest.files.length} file entries to ${file}`);
+        await writeOutput([`Wrote ${manifest.files.length} file entries to ${file}`]);
         return 0;
     }
 
     const manifest = await readManifest(file);
     const report = await verifyManifest(root, manifest, { ...options, under: values.under, details: values.details });
     progress?.finish();
-    if (values.under !== undefined && !values.json) {
-        console.log(`Scope: ${JSON.stringify(values.under)}`);
-    }
-    return reportResult(report, values.json, 'checked', 'Matching files');
+    return reportResult(report, values.json, 'checked', 'Matching files', values.under);
 }
 
 try {
