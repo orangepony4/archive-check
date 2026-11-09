@@ -285,6 +285,9 @@ export async function verifyManifest(root, manifest, { excludePath, onProgress, 
     const remaining = new Map();
     for (const file of manifest.files) {
         const key = unicodePathKey(file.path);
+        if (scope && scope.prefix.startsWith(`${key}/`)) {
+            throw new Error(`Archive scope ${JSON.stringify(scope.path)} conflicts with manifest file ${JSON.stringify(file.path)}.`);
+        }
         if (!scope || key.startsWith(scope.prefix)) {
             remaining.set(key, file);
         }

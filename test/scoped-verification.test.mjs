@@ -112,6 +112,33 @@ test('distinguishes a missing known scope, an unknown scope, and an empty direct
     });
 });
 
+test('rejects a directory scope equal to or below a manifest file', async t => {
+    const { archive, put, create, verify } = await fixture(t);
+    const name = 'R\u00e9sum\u00e9';
+    await put(`Media/${name}`, 'regular file in the reference');
+    const [stored] = await readdir(join(archive, 'Media'));
+    const alternate = stored === stored.normalize('NFC') ? stored.normalize('NFD') : stored.normalize('NFC');
+    create();
+
+    await rm(join(archive, 'Media', stored));
+    await mkdir(join(archive, 'Media', alternate, 'child'), { recursive: true });
+    for (const scope of [`Media/${stored}`, `Media/${alternate}`, `Media/${alternate}/child`]) {
+        const error = verify(2, scope);
+        assert.match(error, /scope.*conflicts with manifest file/i);
+        assert.ok(error.includes(JSON.stringify(`Media/${stored}`)), error);
+    }
+
+    const empty = { checked: 0, missing: [], changed: [], unexpected: [], unsupported: [] };
+    await mkdir(join(archive, 'Media', `${alternate}-other`));
+    assert.deepEqual(verify(0, `Media/${stored}-other`), empty);
+
+    await rmdir(join(archive, 'Media', alternate, 'child'));
+    await rmdir(join(archive, 'Media', alternate));
+    const lowercase = alternate.toLowerCase();
+    await mkdir(join(archive, 'Media', lowercase));
+    assert.deepEqual(verify(0, `Media/${lowercase}`), empty);
+});
+
 test('rejects absolute and traversing scope paths', async t => {
     const { archive, directory, put, create, verify } = await fixture(t);
     await put('valid/file.txt', 'file');
