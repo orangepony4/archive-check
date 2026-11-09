@@ -52,7 +52,9 @@ async function readManifest(file) {
             throw new Error(`Manifest changed before reading: ${file}`);
         }
         bytes = await handle.readFile();
-        if (!sameFile(before, await handle.stat({ bigint: true }))) {
+        // The open handle can remain unchanged even if its path now points elsewhere.
+        if (!sameFile(before, await handle.stat({ bigint: true }))
+            || !sameFile(before, await statIfPresent(file))) {
             throw new Error(`Manifest changed during reading: ${file}`);
         }
     } finally {

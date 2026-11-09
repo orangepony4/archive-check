@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 
 const cliPath = fileURLToPath(new URL('../bin/archive-check.mjs', import.meta.url));
 
-async function fixture(t) {
+async function fixture(t, nodeOptions = []) {
     const tempRoot = await realpath(tmpdir());
     const directory = await mkdtemp(join(tempRoot, 'archive-check-'));
     t.after(async () => {
@@ -24,7 +24,7 @@ async function fixture(t) {
         archive,
         manifest: join(directory, 'manifest.json'),
         run(...args) {
-            const result = spawnSync(process.execPath, [cliPath, ...args], {
+            const result = spawnSync(process.execPath, [...nodeOptions, cliPath, ...args], {
                 cwd: directory,
                 encoding: 'utf8',
                 timeout: 10_000,
@@ -136,6 +136,56 @@ test('creates and verifies an empty manifest for an empty archive', async t => {
     assert.deepEqual(JSON.parse(result.stdout), {
         checked: 0, changed: [], missing: [], unexpected: [], unsupported: [],
     });
+});
+
+test('rejects a manifest path retargeted while its original file is open', async t => {
+    // Swap the parent link immediately after reading the original bytes.
+    const preload = `
+        import fs from 'node:fs/promises';
+        import { syncBuiltinESMExports } from 'node:module';
+        import { dirname, join } from 'node:path';
+
+        const manifest = process.argv[process.argv.indexOf('--manifest') + 1];
+        const link = dirname(manifest);
+        const replacement = join(dirname(link), 'replacement');
+        const windows = process.platform === 'win32';
+        const open = fs.open;
+        fs.open = async (file, ...options) => {
+            const handle = await open(file, ...options);
+            if (file === manifest) {
+                const readFile = handle.readFile.bind(handle);
+                handle.readFile = async (...options) => {
+                    const bytes = await readFile(...options);
+                    if (windows) await fs.rmdir(link);
+                    else await fs.unlink(link);
+                    await fs.symlink(replacement, link, windows ? 'junction' : 'dir');
+                    return bytes;
+                };
+            }
+            return handle;
+        };
+        syncBuiltinESMExports();
+    `;
+    const { directory, archive, run } = await fixture(t, ['--import', `data:text/javascript,${encodeURIComponent(preload)}`]);
+    const original = join(directory, 'original');
+    const replacement = join(directory, 'replacement');
+    const reference = join(directory, 'reference');
+    const manifest = join(reference, 'backup.json');
+    const snapshot = contents => JSON.stringify({
+        version: 1, algorithm: 'sha256', files: [manifestEntry('data.txt', contents)],
+    });
+    await mkdir(original);
+    await mkdir(replacement);
+    await writeFile(join(archive, 'data.txt'), 'good');
+    await writeFile(join(original, 'backup.json'), snapshot('good'));
+    await writeFile(join(replacement, 'backup.json'), snapshot('bad!'));
+    if (!await symlinkOrSkip(t, original, reference, process.platform === 'win32' ? 'junction' : 'dir')) return;
+
+    const result = run('verify', archive, '--manifest', manifest, '--json');
+    assert.equal(await readFile(manifest, 'utf8'), snapshot('bad!'));
+    expectExit(result, 2);
+    assert.equal(result.stdout, '');
+    assert.match(result.stderr, /Manifest changed during reading/);
 });
 
 test('sends progress to standard error without disturbing JSON output', async t => {
