@@ -6,13 +6,13 @@ import { copyFile, link, lstat, open, readFile, rename, rm, stat } from 'node:fs
 import { dirname, join, resolve } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { parseArgs } from 'node:util';
-import { compareManifests, createManifest, validateManifest, verifyManifest } from '../src/archive.mjs';
+import { checksumFiles, compareManifests, createManifest, validateManifest, verifyManifest } from '../src/archive.mjs';
 
 const usage = `Usage:
   archive-check create <folder> --manifest <file> [--force] [--progress]
   archive-check verify <folder> --manifest <file> [--under <directory>] [--details] [--json] [--progress]
   archive-check compare <before.json> <after.json> [--json] [--detect-moves]
-  archive-check export-sha256 <manifest.json>
+  archive-check export-sha256 <manifest.json> [--under <directory>]
 
 Commands:
   create   Record relative paths, sizes and SHA-256 hashes.
@@ -24,7 +24,7 @@ Options:
   --manifest <file>  Path to the JSON manifest.
   --force           Replace an existing valid manifest when creating.
   --progress        Print scan progress to standard error.
-  --under <dir>     Verify only the named relative subdirectory.
+  --under <dir>     Verify or export checksums for one relative subdirectory.
   --details         Include the reason, sizes and hashes for changed files.
   --detect-moves    Suggest unique same-content renames during comparison.
   --json            Print the verification or comparison report as JSON.
@@ -238,13 +238,11 @@ async function main() {
     if (command === 'export-sha256') {
         const [file] = operands;
         if (operands.length !== 1 || !file || values.manifest !== undefined
-            || values.force || values.json || values.progress || values.details || values['detect-moves']
-            || values.under !== undefined) {
-            throw new Error('Expected export-sha256 <manifest.json>. See --help.');
+            || values.force || values.json || values.progress || values.details || values['detect-moves']) {
+            throw new Error('Expected export-sha256 <manifest.json> [--under <directory>]. See --help.');
         }
         const { files } = await readManifest(resolve(file));
-        files.sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
-        await writeOutput(checksumLines(files));
+        await writeOutput(checksumLines(checksumFiles(files, values.under)));
         return 0;
     }
     if (command === 'compare') {
@@ -272,7 +270,7 @@ async function main() {
         throw new Error('--detect-moves applies to compare. See --help.');
     }
     if (command === 'create' && (values.under !== undefined || values.details)) {
-        throw new Error('--under and --details apply to verify. See --help.');
+        throw new Error('--under applies to verify and export-sha256. --details applies to verify. See --help.');
     }
 
     const root = resolve(folder);

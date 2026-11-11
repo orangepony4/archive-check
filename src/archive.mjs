@@ -45,6 +45,26 @@ function parseScope(under) {
     return { path: under, parts: parts.map(unicodePathKey), prefix: `${unicodePathKey(under)}/` };
 }
 
+function* manifestEntriesInScope(files, scope) {
+    for (const file of files) {
+        const key = unicodePathKey(file.path);
+        if (scope && scope.prefix.startsWith(`${key}/`)) {
+            throw new Error(`Archive scope ${JSON.stringify(scope.path)} conflicts with manifest file ${JSON.stringify(file.path)}.`);
+        }
+        if (!scope || key.startsWith(scope.prefix)) yield [key, file];
+    }
+}
+
+export function checksumFiles(files, under) {
+    const scope = parseScope(under);
+    if (!scope) return files.toSorted(comparePathRecords);
+    const selected = Array.from(manifestEntriesInScope(files, scope), ([, file]) => file);
+    if (!selected.length) {
+        throw new Error(`No manifest files under archive scope ${JSON.stringify(scope.path)}.`);
+    }
+    return selected.sort(comparePathRecords);
+}
+
 function registerPath(names, segments, keyForName, source) {
     // Track directory spellings too, so aliases with disjoint children cannot merge.
     for (let index = 0; index < segments.length; index++) {
@@ -282,16 +302,7 @@ export async function verifyManifest(root, manifest, { excludePath, onProgress, 
     const scope = parseScope(under);
     const reportProgress = makeProgressReporter(onProgress);
     const buffer = Buffer.allocUnsafe(hashBufferSize);
-    const remaining = new Map();
-    for (const file of manifest.files) {
-        const key = unicodePathKey(file.path);
-        if (scope && scope.prefix.startsWith(`${key}/`)) {
-            throw new Error(`Archive scope ${JSON.stringify(scope.path)} conflicts with manifest file ${JSON.stringify(file.path)}.`);
-        }
-        if (!scope || key.startsWith(scope.prefix)) {
-            remaining.set(key, file);
-        }
-    }
+    const remaining = new Map(manifestEntriesInScope(manifest.files, scope));
     if (scope) scope.allowMissing = remaining.size > 0;
     const actualNames = new Map();
     const unsupportedKeys = new Set();

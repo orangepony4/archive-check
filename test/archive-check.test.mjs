@@ -287,6 +287,47 @@ test('exports a sorted binary checksum list without reading the archive', async 
         `${dash.sha256} *./-\n${spacedUnicode.sha256} *${spacedUnicode.path}\n${zeta.sha256} *${zeta.path}\n`);
 });
 
+test('exports checksums for a manifest subtree with original archive-root paths', async t => {
+    const { manifest, run } = await fixture(t);
+    const last = manifestEntry('media/cafe\u0301/папка/last.bin', Buffer.from([0, 255, 128]));
+    const first = manifestEntry('media/cafe\u0301/- photo #1.png', 'image');
+    const sibling = manifestEntry('media/cafe\u0301-notes.txt', 'outside the scope');
+    const unrelated = manifestEntry('records/other.txt', 'also outside the scope');
+    await writeFile(manifest, JSON.stringify({
+        version: 1, algorithm: 'sha256', files: [unrelated, last, sibling, first],
+    }));
+
+    const result = run('export-sha256', manifest, '--under', 'media/café');
+    expectExit(result, 0);
+    assert.equal(result.stderr, '');
+    assert.equal(result.stdout,
+        `${first.sha256} *${first.path}\n${last.sha256} *${last.path}\n`);
+});
+
+test('rejects missing, conflicting and nonportable checksum scopes before output', async t => {
+    const { manifest, run } = await fixture(t);
+    await writeFile(manifest, JSON.stringify({
+        version: 1, algorithm: 'sha256', files: [manifestEntry('media/album/photo.png', 'image')],
+    }));
+
+    for (const [scope, diagnostic] of [
+        ['media/Album', /No manifest files under archive scope/],
+        ['media/missing', /No manifest files under archive scope/],
+        ['media/album/photo.png', /conflicts with manifest file/],
+        ['media/album/photo.png/child', /conflicts with manifest file/],
+        ['../media', /Unsafe or nonportable archive scope/],
+        ['media/../media', /Unsafe or nonportable archive scope/],
+        ['media\\album', /Unsafe or nonportable archive scope/],
+        ['C:/media', /Unsafe or nonportable archive scope/],
+        ['', /Unsafe or nonportable archive scope/],
+    ]) {
+        const result = run('export-sha256', manifest, '--under', scope);
+        expectExit(result, 2);
+        assert.match(result.stderr, diagnostic);
+        assert.equal(result.stdout, '');
+    }
+});
+
 test('reports a closed output pipe as an execution error', async t => {
     const { directory, manifest } = await fixture(t);
     await writeFile(manifest, JSON.stringify({

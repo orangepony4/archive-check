@@ -17,10 +17,10 @@ node bin/archive-check.mjs verify "/path/to/copy" --manifest backup.json
 
 On Windows, paths such as `"D:\Photos"` and `"E:\Photos Backup"` work in the same commands. The manifest records paths relative to the archived folder, so the original and the copy can have different locations or drive letters.
 
-To run `archive-check` from any folder, download the `.tgz` from the [releases page](https://github.com/orangepony4/archive-check/releases/latest) and install it with npm. For example, for version 0.4.0:
+To run `archive-check` from any folder, download the `.tgz` from the [releases page](https://github.com/orangepony4/archive-check/releases/latest) and install it with npm.
 
 ```sh
-npm install --global ./archive-check-0.4.0.tgz
+npm install --global ./archive-check-0.5.0.tgz
 archive-check --help
 ```
 
@@ -77,6 +77,15 @@ On Windows, run this example in Git Bash so the redirected list keeps its UTF-8 
 
 The export reads the manifest alone and writes its checksums to standard output. It exits with code `0` on success and `2` on invalid input or execution errors. The list keeps the original filename spelling. Use Archive Check's `verify` to detect extra paths, match canonically equivalent Unicode names, or verify an empty archive.
 
+To check just one subtree with `sha256sum`, export its entries with `--under`. Paths in the list still start at the archive root, so run the check from that root.
+
+```sh
+node bin/archive-check.mjs export-sha256 backup.json --under "photos/2024" > "/path/to/photos-2024.sha256"
+(cd "/path/to/copy" && sha256sum -c "/path/to/photos-2024.sha256")
+```
+
+Use a case-sensitive relative directory with `/` separators. The scope matches canonically equivalent Unicode names in the manifest. If the manifest has no files under that directory, the command exits with code `2` and emits no checksums.
+
 ## What the inventory covers
 
 - The manifest contains relative paths, byte sizes, and SHA-256 hashes. Keep a trusted copy of it to use as your reference after copying or restoring the folder.
@@ -106,5 +115,23 @@ Manifests use UTF-8 JSON. Each path is relative to the archive and uses `/` as i
 ## Development
 
 Run `npm test` to exercise the CLI against temporary directories. The integration tests use synthetic files and require no external services.
+
+## Русский
+
+Archive Check сохраняет список файлов, их размеры и хеши SHA-256. Команда `create` записывает манифест, а `verify` показывает пропавшие, изменённые и лишние файлы в копии. Для запуска нужен Node.js 20 или новее.
+
+```sh
+node bin/archive-check.mjs create "/path/to/original" --manifest backup.json
+node bin/archive-check.mjs verify "/path/to/copy" --manifest backup.json
+```
+
+Чтобы передать на проверку через GNU `sha256sum` только одну папку из манифеста, добавьте `--under` к команде `export-sha256`. Укажите относительный путь с разделителями `/` и сохраните регистр букв. Пути в списке начинаются от корня архива. Если под указанной папкой нет файлов из манифеста, команда завершится с кодом `2` и не выведет контрольные суммы.
+
+```sh
+node bin/archive-check.mjs export-sha256 backup.json --under "photos/2024" > "/path/to/photos-2024.sha256"
+(cd "/path/to/copy" && sha256sum -c "/path/to/photos-2024.sha256")
+```
+
+В Windows запустите эти команды в Git Bash, чтобы перенаправление сохранило кодировку UTF-8 и окончания строк LF.
 
 Released under the [MIT License](LICENSE).
